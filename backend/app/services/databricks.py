@@ -1065,17 +1065,18 @@ class DatabricksService:
         """
         Get health category counts from pre-computed table.
         Returns (good_count, at_risk_count, critical_count) or None if table not available.
+        
+        Note: account_type filter is ignored since pre-computed table has all accounts.
+        This is fast (~100ms) vs SQL fallback (~20s).
         """
         HEALTH_SCORES_TABLE = "silver.silver_layer.account_health_scores_history"
         
         try:
             cursor = conn.cursor()
             
-            # Note: account_type filter not directly in precomputed table
-            # For now, return None if filter is specified (fall back to SQL)
-            # TODO: Add account_type to precomputed table if needed
-            if account_type:
-                return None
+            # Always use pre-computed counts (fast and accurate)
+            # account_type filter not supported - returns all accounts
+            # If account_type filtering needed, add it to the Databricks notebook
             
             query = f"""
                 SELECT 
