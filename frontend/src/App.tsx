@@ -108,46 +108,19 @@ function App() {
     popup?.focus()
   }, [])
 
+  const isHome = activeNav === 'home'
+  const homeSubPage = isHome && selectedAccountId ? 'account'
+    : isHome && showARRAnalysis ? 'arr'
+    : isHome && showCustomerGrowth ? 'growth'
+    : null
+  const showDashboard = isHome && !homeSubPage
+
   const renderPage = () => {
-    // If ARR Analysis is active, show that page
-    if (showARRAnalysis && activeNav === 'home') {
-      return (
-        <main className="flex-1 overflow-auto">
-          <ARRAnalysis 
-            onBack={handleCloseARR} 
-            accountTypeFilter={accountTypeFilter !== 'all' ? accountTypeFilter : undefined}
-          />
-        </main>
-      )
-    }
-
-    // If Customer Growth is active, show that page
-    if (showCustomerGrowth && activeNav === 'home') {
-      return (
-        <main className="flex-1 overflow-auto">
-          <CustomerGrowth 
-            onBack={handleCloseCustomerGrowth} 
-            onAccountClick={handleAccountClick}
-            accountType={accountTypeFilter}
-          />
-        </main>
-      )
-    }
-
-    // If an account is selected, show the detail page
-    if (selectedAccountId && activeNav === 'home') {
-      return (
-        <AccountDetail 
-          accountId={selectedAccountId} 
-          onBack={handleBackToPortfolio} 
-        />
-      )
-    }
-
-    switch (activeNav) {
-      case 'home':
-        return (
-          <main className="flex-1 overflow-y-auto">
+    return (
+      <>
+        {/* Dashboard stays mounted while on home nav to preserve filter/scroll state */}
+        {isHome && (
+          <main className="flex-1 overflow-y-auto" style={{ display: showDashboard ? undefined : 'none' }}>
             <Dashboard 
               searchTerm={searchTerm} 
               onAccountClick={handleAccountClick} 
@@ -156,22 +129,47 @@ function App() {
               accountTypeFilter={accountTypeFilter}
             />
           </main>
-        )
-      case 'csm-management':
-        return (
+        )}
+
+        {homeSubPage === 'arr' && (
+          <main className="flex-1 overflow-auto">
+            <ARRAnalysis 
+              onBack={handleCloseARR} 
+              accountTypeFilter={accountTypeFilter !== 'all' ? accountTypeFilter : undefined}
+            />
+          </main>
+        )}
+
+        {homeSubPage === 'growth' && (
+          <main className="flex-1 overflow-auto">
+            <CustomerGrowth 
+              onBack={handleCloseCustomerGrowth} 
+              onAccountClick={handleAccountClick}
+              accountType={accountTypeFilter}
+            />
+          </main>
+        )}
+
+        {homeSubPage === 'account' && selectedAccountId && (
+          <AccountDetail 
+            accountId={selectedAccountId} 
+            onBack={handleBackToPortfolio} 
+          />
+        )}
+
+        {activeNav === 'csm-management' && (
           <main className="flex-1 overflow-auto bg-slate-50">
             <ManageCSM />
           </main>
-        )
-      case 'actions':
-        return (
+        )}
+
+        {activeNav === 'actions' && (
           <main className="flex-1 overflow-auto bg-slate-50">
             <Actions />
           </main>
-        )
-      default:
-        return null
-    }
+        )}
+      </>
+    )
   }
 
   return (
