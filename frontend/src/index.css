@@ -1,0 +1,77 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-family: 'Inter', system-ui, sans-serif;
+  @apply bg-background-light text-navy-900 antialiased;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-slate-100 rounded;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-slate-300 rounded-full hover:bg-slate-400;
+}
+
+/* Slide-in animation for panels */
+@keyframes slide-in-right {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.animate-slide-in-right {
+  animation: slide-in-right 0.3s ease-out;
+}
+
+/* Circular progress indicators */
+.circular-progress {
+  background: radial-gradient(closest-side, white 79%, transparent 80% 100%),
+              conic-gradient(var(--progress-color, #22c55e) var(--progress, 0%), #f1f5f9 0);
+}
+
+/* Executive card hover effect */
+.exec-card {
+  @apply bg-white rounded-xl border border-slate-200 shadow-sm transition-all duration-200;
+}
+
+.exec-card:hover {
+  @apply shadow-md border-slate-300;
+}
+
+/* Trend badge styles */
+.trend-badge-positive {
+  @apply text-emerald-600 bg-emerald-50 border border-emerald-100;
+}
+
+.trend-badge-negative {
+  @apply text-rose-600 bg-rose-50 border border-rose-100;
+}
+
+.trend-badge-neutral {
+  @apply text-amber-600 bg-amber-50 border border-amber-100;
+}
+
+/* KPI value styling */
+.kpi-value {
+  @apply text-4xl font-black text-navy-900 tracking-tight;
+}
+
+.kpi-label {
+  @apply text-xs font-bold uppercase tracking-wider text-slate-500;
+}

@@ -1,0 +1,16 @@
+# Databricks Apps configuration for IONA CX
+command:
+  - uvicorn
+  - app.main:app
+  - --host
+  - 0.0.0.0
+  - --port
+  - 8000
+
+env:
+  - name: ENVIRONMENT
+    value: "production"
+  # DATABRICKS_HOST is automatically provided by Databricks Apps
+  # SQL warehouse ID comes from the resource (add via UI with key "sql-warehouse")
+  - name: DATABRICKS_WAREHOUSE_ID
+    valueFrom: sql-warehouse

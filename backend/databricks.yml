@@ -1,0 +1,16 @@
+bundle:
+  name: iona_cx_bundle
+
+resources:
+  apps:
+    iona_cx:
+      name: iona-cx
+      source_code_path: .
+      description: IONA CX - Customer Success Dashboard
+
+targets:
+  prod:
+    mode: production
+    default: true
+    workspace:
+      host: https://dbc-97a2feb3-3e52.cloud.databricks.com
