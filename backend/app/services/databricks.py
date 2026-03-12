@@ -1139,6 +1139,7 @@ class DatabricksService:
             
             # Fast SQL query that estimates health score categories
             # Based on renewal days (primary factor) + critical/high Freshdesk tickets
+            # FIXED: Removed strict filters to match web app's actual renewal logic
             query = f"""
                 WITH account_renewal AS (
                     SELECT 
@@ -1147,9 +1148,7 @@ class DatabricksService:
                         MIN(
                             CASE 
                                 WHEN fct.RENEWAL_NOT_YET_CONTRACTED = 'Y' 
-                                    AND fct.revenue_type NOT IN ('Services', 'Perpetual')
-                                    AND fct.churn_expected_occurred = 'nan'
-                                    AND fct.rev_rec_end_date > CURRENT_DATE()
+                                    AND fct.rev_rec_end_date IS NOT NULL
                                 THEN DATEDIFF(TRY_CAST(fct.REV_REC_END_DATE AS DATE), CURRENT_DATE())
                                 ELSE 9999
                             END
