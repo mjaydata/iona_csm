@@ -1104,6 +1104,37 @@ class DatabricksService:
             logger.warning(f"Failed to get health counts from precomputed table: {e}")
             return None
 
+    def _get_usage_decline_count_from_precomputed(self, conn) -> int:
+        """
+        Get count of accounts with significant usage decline (>=20% drop).
+        Uses pre-computed table for fast lookup.
+        """
+        HEALTH_SCORES_TABLE = "silver.silver_layer.account_health_scores_history"
+        
+        try:
+            cursor = conn.cursor()
+            
+            query = f"""
+                SELECT COUNT(*) 
+                FROM {HEALTH_SCORES_TABLE}
+                WHERE score_date = (SELECT MAX(score_date) FROM {HEALTH_SCORES_TABLE})
+                  AND has_pendo = true
+                  AND previous_visitors > 0
+                  AND ((current_visitors - previous_visitors) * 100.0 / previous_visitors) <= -20
+            """
+            
+            cursor.execute(query)
+            row = cursor.fetchone()
+            cursor.close()
+            
+            count = int(row[0]) if row and row[0] else 0
+            logger.info(f"Usage decline count (>=20% drop): {count}")
+            return count
+            
+        except Exception as e:
+            logger.warning(f"Failed to get usage decline count: {e}")
+            return 0
+
     def _calculate_at_risk_count_by_health_score(
         self, 
         conn, 
@@ -1564,6 +1595,9 @@ class DatabricksService:
 
                 cursor.close()
 
+                # Get usage decline count from pre-computed table
+                usage_decline = self._get_usage_decline_count_from_precomputed(conn)
+
                 metrics = MetricsSummary(
                     total_accounts=total,
                     total_arr=portfolio_arr_eur,
@@ -1576,7 +1610,7 @@ class DatabricksService:
                     ),
                     at_risk_count=critical + at_risk,
                     renewals_90_days=renewals_count,
-                    usage_decline_count=0,
+                    usage_decline_count=usage_decline,
                     expansion_signals=0,
                 )
                 logger.info(f"Returning metrics: renewals_arr={renewals_arr}, renewals_count={renewals_count}")
