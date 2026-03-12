@@ -556,6 +556,213 @@ class DatabricksService:
             scoring_version="rule-based-v1.2"
         )
 
+    def _get_precomputed_health_scores(self, conn) -> dict:
+        """
+        Fetch pre-computed health scores from daily snapshot table.
+        Returns dict[account_id -> HealthScoreDetail] for ALL accounts.
+        
+        This is MUCH faster than real-time calculation (~100ms vs ~60s).
+        The table is updated daily by a Databricks job.
+        """
+        HEALTH_SCORES_TABLE = "silver.silver_layer.account_health_scores_history"
+        result = {}
+        
+        try:
+            cursor = conn.cursor()
+            
+            # Get the latest scores (most recent score_date)
+            query = f"""
+                SELECT 
+                    account_id,
+                    account_name,
+                    health_score,
+                    health_category,
+                    renewal_days,
+                    current_visitors,
+                    previous_visitors,
+                    open_critical,
+                    open_high,
+                    open_total,
+                    has_pendo,
+                    has_freshdesk
+                FROM {HEALTH_SCORES_TABLE}
+                WHERE score_date = (SELECT MAX(score_date) FROM {HEALTH_SCORES_TABLE})
+            """
+            
+            cursor.execute(query)
+            rows = cursor.fetchall()
+            cursor.close()
+            
+            for row in rows:
+                account_id = row[0]
+                if not account_id:
+                    continue
+                    
+                health_score = int(row[2]) if row[2] is not None else 100
+                health_category_str = row[3] if row[3] else "Good"
+                renewal_days = int(row[4]) if row[4] is not None else 999
+                current_visitors = int(row[5]) if row[5] is not None else 0
+                previous_visitors = int(row[6]) if row[6] is not None else 0
+                open_critical = int(row[7]) if row[7] is not None else 0
+                open_high = int(row[8]) if row[8] is not None else 0
+                open_total = int(row[9]) if row[9] is not None else 0
+                has_pendo = bool(row[10]) if row[10] is not None else False
+                has_freshdesk = bool(row[11]) if row[11] is not None else False
+                
+                # Map category string to enum
+                if health_category_str == "Critical":
+                    category = HealthScore.CRITICAL
+                elif health_category_str == "At Risk":
+                    category = HealthScore.AT_RISK
+                else:
+                    category = HealthScore.GOOD
+                
+                # Reconstruct factors from pre-computed data
+                factors = self._reconstruct_health_factors(
+                    renewal_days=renewal_days,
+                    current_visitors=current_visitors,
+                    previous_visitors=previous_visitors,
+                    open_critical=open_critical,
+                    open_high=open_high,
+                    open_total=open_total,
+                    has_pendo=has_pendo,
+                    has_freshdesk=has_freshdesk,
+                )
+                
+                result[account_id] = HealthScoreDetail(
+                    score=health_score,
+                    category=category,
+                    factors=factors,
+                    has_pendo=has_pendo,
+                    has_freshdesk=has_freshdesk,
+                    scoring_version="precomputed-v1.0"
+                )
+            
+            logger.info(f"Loaded {len(result)} pre-computed health scores")
+            return result
+            
+        except Exception as e:
+            logger.warning(f"Failed to load pre-computed health scores: {e}")
+            return {}
+
+    def _reconstruct_health_factors(
+        self,
+        renewal_days: int,
+        current_visitors: int,
+        previous_visitors: int,
+        open_critical: int,
+        open_high: int,
+        open_total: int,
+        has_pendo: bool,
+        has_freshdesk: bool,
+    ) -> List[HealthScoreFactor]:
+        """
+        Reconstruct health score factors from pre-computed metrics.
+        This matches the logic in calculate_health_score_detail().
+        """
+        factors = []
+        
+        # 1. CONTRACT RENEWAL (max 25 point deduction)
+        if renewal_days < 999:
+            if renewal_days <= 30:
+                renewal_deduction = 25
+                renewal_detail = f"{renewal_days} days away (critical)"
+            elif renewal_days <= 60:
+                renewal_deduction = 18
+                renewal_detail = f"{renewal_days} days away (urgent)"
+            elif renewal_days <= 90:
+                renewal_deduction = 12
+                renewal_detail = f"{renewal_days} days away (soon)"
+            elif renewal_days <= 180:
+                renewal_deduction = 5
+                renewal_detail = f"{renewal_days} days away"
+            else:
+                renewal_deduction = 0
+                renewal_detail = f"{renewal_days}+ days away"
+        else:
+            renewal_deduction = 0
+            renewal_detail = "No upcoming renewal"
+        
+        factors.append(HealthScoreFactor(
+            name="Contract Renewal",
+            points=renewal_deduction,
+            max_points=25,
+            detail=renewal_detail,
+            icon="📅"
+        ))
+        
+        # 2. PENDO PRODUCT USAGE (max 40 point deduction)
+        if has_pendo:
+            if previous_visitors > 0:
+                change_pct = ((current_visitors - previous_visitors) / previous_visitors) * 100
+                
+                if current_visitors == 0:
+                    pendo_deduction = 40
+                    pendo_detail = f"No activity last 30d (was {previous_visitors} users)"
+                elif change_pct <= -50:
+                    pendo_deduction = 35
+                    pendo_detail = f"↓{abs(int(change_pct))}% severe decline ({current_visitors} vs {previous_visitors} users)"
+                elif change_pct <= -30:
+                    pendo_deduction = 25
+                    pendo_detail = f"↓{abs(int(change_pct))}% significant decline ({current_visitors} users)"
+                elif change_pct <= -10:
+                    pendo_deduction = 12
+                    pendo_detail = f"↓{abs(int(change_pct))}% slight decline ({current_visitors} users)"
+                elif change_pct >= 10:
+                    pendo_deduction = 0
+                    pendo_detail = f"↑{int(change_pct)}% growth ({current_visitors} users)"
+                else:
+                    pendo_deduction = 0
+                    pendo_detail = f"Stable ({current_visitors} active users)"
+            elif current_visitors > 0:
+                pendo_deduction = 0
+                pendo_detail = f"{current_visitors} active users (baseline)"
+            else:
+                pendo_deduction = 20
+                pendo_detail = "No activity recorded"
+        else:
+            pendo_deduction = 0
+            pendo_detail = "No Pendo integration"
+        
+        factors.append(HealthScoreFactor(
+            name="Pendo Product Usage",
+            points=pendo_deduction,
+            max_points=40,
+            detail=pendo_detail,
+            icon="📊"
+        ))
+        
+        # 3. FRESHDESK SUPPORT (max 35 point deduction)
+        if has_freshdesk:
+            support_deduction = 0
+            if open_critical > 0:
+                support_deduction += 20
+            if open_high > 0:
+                support_deduction += min(10, open_high * 5)
+            support_deduction = min(35, support_deduction)
+            
+            if open_critical > 0:
+                support_detail = f"{open_critical} critical ticket(s)"
+            elif open_high > 0:
+                support_detail = f"{open_high} high priority ticket(s)"
+            elif open_total > 0:
+                support_detail = f"{open_total} open ticket(s)"
+            else:
+                support_detail = "No open tickets"
+        else:
+            support_deduction = 0
+            support_detail = "No Freshdesk integration"
+        
+        factors.append(HealthScoreFactor(
+            name="Freshdesk Support",
+            points=support_deduction,
+            max_points=35,
+            detail=support_detail,
+            icon="🎫"
+        ))
+        
+        return factors
+
     def _get_all_pendo_metrics_batch(self, conn, account_names: List[str]) -> dict:
         """
         Batch fetch Pendo metrics for multiple accounts in ONE query.
@@ -850,27 +1057,75 @@ class DatabricksService:
             logger.warning(f"_get_freshdesk_support_metrics error: {e}")
             return None
 
+    def _get_health_counts_from_precomputed(
+        self,
+        conn,
+        account_type: Optional[str] = None
+    ) -> Optional[Tuple[int, int, int]]:
+        """
+        Get health category counts from pre-computed table.
+        Returns (good_count, at_risk_count, critical_count) or None if table not available.
+        """
+        HEALTH_SCORES_TABLE = "silver.silver_layer.account_health_scores_history"
+        
+        try:
+            cursor = conn.cursor()
+            
+            # Note: account_type filter not directly in precomputed table
+            # For now, return None if filter is specified (fall back to SQL)
+            # TODO: Add account_type to precomputed table if needed
+            if account_type:
+                return None
+            
+            query = f"""
+                SELECT 
+                    SUM(CASE WHEN health_category = 'Good' THEN 1 ELSE 0 END) as good_count,
+                    SUM(CASE WHEN health_category = 'At Risk' THEN 1 ELSE 0 END) as at_risk_count,
+                    SUM(CASE WHEN health_category = 'Critical' THEN 1 ELSE 0 END) as critical_count
+                FROM {HEALTH_SCORES_TABLE}
+                WHERE score_date = (SELECT MAX(score_date) FROM {HEALTH_SCORES_TABLE})
+            """
+            
+            cursor.execute(query)
+            row = cursor.fetchone()
+            cursor.close()
+            
+            if row:
+                good = int(row[0]) if row[0] else 0
+                at_risk = int(row[1]) if row[1] else 0
+                critical = int(row[2]) if row[2] else 0
+                logger.info(f"Health counts from precomputed: good={good}, at_risk={at_risk}, critical={critical}")
+                return good, at_risk, critical
+            
+            return None
+            
+        except Exception as e:
+            logger.warning(f"Failed to get health counts from precomputed table: {e}")
+            return None
+
     def _calculate_at_risk_count_by_health_score(
         self, 
         conn, 
         account_type: Optional[str] = None
     ) -> Tuple[int, int, int]:
         """
-        Calculate count of accounts by health score category using FAST SQL-based approximation.
+        Calculate count of accounts by health score category.
         
-        Health Score factors and their max deductions:
-        - Contract Renewal: up to -25 (renewal <=30d = -25, <=60d = -18, <=90d = -12, <=180d = -5)
-        - Pendo Usage: up to -30 (not calculated in SQL - assume 0 for speed)
-        - Freshdesk Support: up to -25 (critical tickets = -15, high = up to -10)
-        - User Activity: up to -20 (not calculated in SQL - assume 0 for speed)
-        
-        Simplified: Count based on renewal risk + open critical/high tickets
+        First tries to use pre-computed health scores (fast).
+        Falls back to SQL-based approximation if pre-computed not available.
         
         Returns (good_count, at_risk_count, critical_count):
-        - Good: estimated health score >= 70 (lost < 30 points)
-        - At Risk: estimated score 40-69 (lost 30-60 points)  
-        - Critical: estimated score < 40 (lost > 60 points)
+        - Good: health score >= 70
+        - At Risk: score 40-69
+        - Critical: score < 40
         """
+        # Try pre-computed first (much faster)
+        precomputed = self._get_health_counts_from_precomputed(conn, account_type)
+        if precomputed is not None:
+            return precomputed
+        
+        # Fall back to SQL-based approximation
+        logger.info("Falling back to SQL-based health score estimation")
         FCT_TABLE = "silver.silver_layer.fct_contracts"
         
         try:
@@ -2002,16 +2257,24 @@ class DatabricksService:
                     return None
 
                 # ══════════════════════════════════════════════════════════════
-                # BATCH FETCH Pendo and Freshdesk metrics (2 queries instead of N*2)
+                # FETCH PRE-COMPUTED HEALTH SCORES (1 fast query instead of N*2)
+                # Falls back to real-time calculation if pre-computed not available
                 # ══════════════════════════════════════════════════════════════
-                all_account_names = [row[1] for row in raw_accounts if row[1]]
-                logger.info(f"Batch fetching Pendo/Freshdesk metrics for {len(all_account_names)} accounts")
+                logger.info(f"Fetching pre-computed health scores for {len(raw_accounts)} accounts")
+                precomputed_scores = self._get_precomputed_health_scores(conn)
                 
-                pendo_metrics_batch = self._get_all_pendo_metrics_batch(conn, all_account_names)
-                freshdesk_metrics_batch = self._get_all_freshdesk_metrics_batch(conn, all_account_names)
+                # Only fetch Pendo/Freshdesk batch if pre-computed scores not available
+                pendo_metrics_batch = {}
+                freshdesk_metrics_batch = {}
+                if not precomputed_scores:
+                    logger.warning("Pre-computed scores not available, falling back to real-time calculation")
+                    all_account_names = [row[1] for row in raw_accounts if row[1]]
+                    pendo_metrics_batch = self._get_all_pendo_metrics_batch(conn, all_account_names)
+                    freshdesk_metrics_batch = self._get_all_freshdesk_metrics_batch(conn, all_account_names)
                 
                 accounts = []
                 at_risk_count = 0  # Count of ALL at-risk accounts (score < 70)
+                fallback_count = 0  # Track how many accounts needed fallback
                 
                 for row in raw_accounts:
                     # Query returns: account_id, name, industry, csm_name, parent_id, parent_name, account_executive
@@ -2037,14 +2300,23 @@ class DatabricksService:
                     renewal_days = nearest_days if nearest_days is not None else 999
                     parsed_renewal_date = nearest_date if nearest_date else date.today() + timedelta(days=999)
 
-                    # Calculate comprehensive health score with detailed breakdown
-                    # Use pre-fetched batch data for performance
-                    health_detail = self.calculate_health_score_detail(
-                        account_name=name or "Unknown",
-                        renewal_days=renewal_days,
-                        pendo_data=pendo_metrics_batch.get(name),
-                        freshdesk_data=freshdesk_metrics_batch.get(name),
-                    )
+                    # Use pre-computed health score if available, otherwise fall back to real-time
+                    if account_id and account_id in precomputed_scores:
+                        health_detail = precomputed_scores[account_id]
+                    else:
+                        # Fallback: calculate in real-time (slower)
+                        fallback_count += 1
+                        if not pendo_metrics_batch and not freshdesk_metrics_batch:
+                            # Lazy load batch data if needed for fallback
+                            all_account_names = [row[1] for row in raw_accounts if row[1]]
+                            pendo_metrics_batch = self._get_all_pendo_metrics_batch(conn, all_account_names)
+                            freshdesk_metrics_batch = self._get_all_freshdesk_metrics_batch(conn, all_account_names)
+                        health_detail = self.calculate_health_score_detail(
+                            account_name=name or "Unknown",
+                            renewal_days=renewal_days,
+                            pendo_data=pendo_metrics_batch.get(name),
+                            freshdesk_data=freshdesk_metrics_batch.get(name),
+                        )
                     health = health_detail.category
                     
                     # Count at-risk accounts BEFORE any filtering
@@ -2103,7 +2375,8 @@ class DatabricksService:
                 offset = (page - 1) * page_size
                 paginated_accounts = accounts[offset:offset + page_size]
                 
-                logger.info(f"Returning {len(paginated_accounts)} accounts (page {page}, total: {total}, at_risk: {at_risk_count})")
+                precomputed_used = len(raw_accounts) - fallback_count
+                logger.info(f"Returning {len(paginated_accounts)} accounts (page {page}, total: {total}, at_risk: {at_risk_count}, precomputed: {precomputed_used}, fallback: {fallback_count})")
                 return paginated_accounts, total, at_risk_count
 
             except Exception as e:
