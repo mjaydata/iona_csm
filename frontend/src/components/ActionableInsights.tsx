@@ -1,5 +1,5 @@
 import { clsx } from 'clsx'
-import { AlertTriangle, RefreshCcw, TrendingDown, TrendingUp, X } from 'lucide-react'
+import { AlertTriangle, RefreshCcw, TrendingDown, TrendingUp, X, Info } from 'lucide-react'
 import type { MetricsSummary } from '../types'
 
 type KpiFilter = 'all' | 'at_risk' | 'renewals' | 'usage_decline' | 'expansion'
@@ -23,6 +23,7 @@ interface InsightCardProps {
   actionColor: string
   onClick: () => void
   isActive: boolean
+  tooltip?: string
 }
 
 function InsightCard({
@@ -36,6 +37,7 @@ function InsightCard({
   actionColor,
   onClick,
   isActive,
+  tooltip,
 }: InsightCardProps) {
   return (
     <button
@@ -53,7 +55,18 @@ function InsightCard({
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
-          <p className="text-sm font-bold text-slate-900">{title}</p>
+          <div className="flex items-center gap-1.5">
+            <p className="text-sm font-bold text-slate-900">{title}</p>
+            {tooltip && (
+              <div className="group relative">
+                <Info className="w-3.5 h-3.5 text-slate-400 cursor-help" />
+                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-slate-800 text-white text-xs rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 w-64 z-50 shadow-lg">
+                  {tooltip}
+                  <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800" />
+                </div>
+              </div>
+            )}
+          </div>
           {isActive && <X className="w-3.5 h-3.5 text-slate-400" />}
         </div>
         <p className="text-xs text-slate-600 mt-1 leading-relaxed">{description}</p>
@@ -121,12 +134,13 @@ export function ActionableInsights({ metrics, isLoading, activeKpi, onKpiClick, 
           iconBg="bg-amber-100"
           cardBg="bg-amber-50/50"
           cardBorder="border-amber-100"
-          title={isLoading ? '...' : `${usageDecline} Usage Declining`}
-          description="Engagement metrics trending down. Proactive outreach needed."
+          title={isLoading ? '...' : `${usageDecline} Product Usage Declining`}
+          description="Pendo active visitors dropped 20%+ vs prior month. Proactive outreach needed."
           actionLabel="Review Accounts"
           actionColor="text-amber-600"
           onClick={() => onKpiClick(activeKpi === 'usage_decline' ? 'all' : 'usage_decline')}
           isActive={activeKpi === 'usage_decline'}
+          tooltip="Based on Pendo visitor data. Counts accounts where active users dropped 20% or more compared to the previous 30-day period. Not all accounts have Pendo integrated."
         />
 
         <InsightCard
