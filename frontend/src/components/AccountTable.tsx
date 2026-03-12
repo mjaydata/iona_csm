@@ -517,8 +517,8 @@ function AccountRow({
 }) {
   return (
     <tr className="hover:bg-slate-50 transition-colors">
-      <td className={clsx('px-4 py-3', indented && 'pl-12')}>
-        <div className="flex items-center gap-3">
+      <td className={clsx('px-4 py-2 overflow-hidden', indented && 'pl-12')}>
+        <div className="flex items-center gap-2.5 min-w-0">
           <div className="flex-shrink-0">
             <div className={clsx(
               'w-2 h-2 rounded-full',
@@ -529,13 +529,14 @@ function AccountRow({
           </div>
           <button
             onClick={() => onAccountClick?.(account.id)}
-            className="font-medium text-slate-800 hover:text-primary-600 transition-colors text-left"
+            className="font-medium text-sm text-slate-800 hover:text-primary-600 transition-colors text-left truncate max-w-full"
+            title={account.name}
           >
             <HighlightedText text={account.name} searchTerm={searchTerm} />
           </button>
         </div>
       </td>
-      <td className="px-2 py-3">
+      <td className="px-2 py-2">
         <HealthBadgeWithSignal
           health={account.health}
           signalType={account.primary_signal_type}
@@ -544,13 +545,13 @@ function AccountRow({
           accountId={account.id}
         />
       </td>
-      <td className="px-2 py-3">
+      <td className="px-2 py-2">
         <PersonCell name={account.csm_name} variant="csm" />
       </td>
-      <td className="px-2 py-3">
+      <td className="px-2 py-2">
         <PersonCell name={account.ae_name} variant="ae" />
       </td>
-      <td className="px-3 py-3">
+      <td className="px-3 pr-6 py-2">
         <RenewalTimelineRibbon renewals={account.renewals} />
       </td>
     </tr>
@@ -706,31 +707,31 @@ export function AccountTable({
   }, [hasNextPage, isFetchingNextPage, onLoadMore])
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex-1 overflow-auto">
+    <div>
+      <div>
         <table className="w-full table-fixed">
           <colgroup>
-            <col style={{ width: '22%' }} />
+            <col style={{ width: '20%' }} />
             <col style={{ width: '8%' }} />
-            <col style={{ width: '14%' }} />
-            <col style={{ width: '14%' }} />
-            <col style={{ width: '42%' }} />
+            <col style={{ width: '13%' }} />
+            <col style={{ width: '13%' }} />
+            <col style={{ width: '46%' }} />
           </colgroup>
-          <thead className="sticky top-0 z-20">
+          <thead>
             <tr className="border-b border-gray-200 bg-slate-50">
-              <th className="px-4 py-3 text-left text-[11px] font-semibold text-slate-600 uppercase tracking-wider bg-slate-50">
+              <th className="px-4 py-2 text-left text-[11px] font-semibold text-slate-500 uppercase tracking-wider bg-slate-50">
                 Account
               </th>
-              <th className="px-2 py-3 text-left text-[11px] font-semibold text-slate-600 uppercase tracking-wider bg-slate-50">
+              <th className="px-2 py-2 text-left text-[11px] font-semibold text-slate-500 uppercase tracking-wider bg-slate-50">
                 Health
               </th>
-              <th className="px-2 py-3 text-left text-[11px] font-semibold text-slate-600 uppercase tracking-wider bg-slate-50">
+              <th className="px-2 py-2 text-left text-[11px] font-semibold text-slate-500 uppercase tracking-wider bg-slate-50">
                 CSM
               </th>
-              <th className="px-2 py-3 text-left text-[11px] font-semibold text-slate-600 uppercase tracking-wider bg-slate-50">
+              <th className="px-2 py-2 text-left text-[11px] font-semibold text-slate-500 uppercase tracking-wider bg-slate-50">
                 AE
               </th>
-              <th className="px-3 py-3 text-left text-[11px] font-semibold text-slate-600 uppercase tracking-wider bg-slate-50">
+              <th className="px-3 pr-6 py-2 text-left text-[11px] font-semibold text-slate-500 uppercase tracking-wider bg-slate-50">
                 <TimelineLegendTooltip />
               </th>
             </tr>
@@ -757,7 +758,7 @@ export function AccountTable({
                       className="hover:bg-slate-50 transition-colors cursor-pointer bg-slate-50/50"
                       onClick={() => toggleGroup(group.parentId)}
                     >
-                      <td className="px-4 py-3" colSpan={5}>
+                      <td className="px-4 py-2" colSpan={5}>
                         <div className="flex items-center gap-3">
                           <button className="flex items-center justify-center w-5 h-5 text-slate-500 hover:text-slate-700">
                             {expandedGroups.has(group.parentId) ? (
@@ -808,7 +809,7 @@ export function AccountTable({
         </table>
 
         {accounts.length > 0 && (
-          <div ref={loadMoreRef} className="py-4 flex items-center justify-center">
+          <div ref={loadMoreRef} className="py-3 flex items-center justify-center">
             {isFetchingNextPage ? (
               <div className="flex items-center gap-2 text-slate-500">
                 <Loader2 className="w-4 h-4 animate-spin" />

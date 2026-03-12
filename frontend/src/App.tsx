@@ -147,7 +147,7 @@ function App() {
     switch (activeNav) {
       case 'home':
         return (
-          <main className="flex-1 overflow-hidden">
+          <main className="flex-1 overflow-y-auto">
             <Dashboard 
               searchTerm={searchTerm} 
               onAccountClick={handleAccountClick} 
@@ -188,7 +188,7 @@ function App() {
       />
 
       {/* Main Content - Offset for sidebar */}
-      <div className={`flex flex-col h-screen min-w-0 overflow-hidden transition-all duration-300 ${sidebarExpanded ? 'ml-56' : 'ml-20'}`}>
+      <div className={`flex flex-col h-screen min-w-0 overflow-hidden transition-all duration-300 ${sidebarExpanded ? 'ml-56' : 'ml-16'}`}>
         <Header
           searchTerm={searchTerm}
           onSearchChange={handleSearchChange}

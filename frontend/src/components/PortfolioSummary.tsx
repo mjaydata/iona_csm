@@ -297,33 +297,33 @@ export function PortfolioSummary({ metrics, isLoading, onOpenARR, onOpenCustomer
   const isClickable = !!onOpenCustomerGrowth
 
   return (
-    <div className="grid grid-cols-2 gap-4">
-      {/* Companies - matches ARR card style + health bar */}
+    <div className="grid grid-cols-2 gap-3">
+      {/* Companies */}
       <button
         onClick={onOpenCustomerGrowth}
         className={clsx(
-          'bg-white p-6 rounded-xl border border-slate-200 shadow-sm text-left transition-shadow',
+          'bg-white p-4 rounded-xl border border-slate-200 shadow-sm text-left transition-shadow',
           isClickable && 'hover:shadow-md cursor-pointer group'
         )}
       >
-        <div className="flex justify-between items-start mb-3">
-          <p className="text-sm font-semibold text-slate-500">Companies</p>
+        <div className="flex justify-between items-start mb-2">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Companies</p>
           <div className="flex items-center gap-2">
             {yoyLabel && <TrendBadge value={yoyLabel} type={yoyTrendType} />}
             {isClickable && (
-              <ExternalLink className="w-3.5 h-3.5 text-slate-300 group-hover:text-primary transition-colors" />
+              <ExternalLink className="w-3 h-3 text-slate-300 group-hover:text-primary transition-colors" />
             )}
           </div>
         </div>
-        <div className="flex items-end gap-4 mb-3">
+        <div className="flex items-end gap-3 mb-2">
           {isLoading ? (
-            <div className="h-9 w-28 bg-slate-100 rounded animate-pulse" />
+            <div className="h-8 w-24 bg-slate-100 rounded animate-pulse" />
           ) : (
-            <h3 className="text-3xl font-bold text-slate-900 tracking-tight">
+            <h3 className="text-2xl font-bold text-slate-900 tracking-tight">
               {totalAccounts.toLocaleString()}
             </h3>
           )}
-          <div className="flex-1 h-10 mb-1">
+          <div className="flex-1 h-8 mb-0.5">
             {growthSeries && growthSeries.length > 2 ? (
               <DataSparkline series={growthSeries} />
             ) : (
@@ -331,7 +331,6 @@ export function PortfolioSummary({ metrics, isLoading, onOpenARR, onOpenCustomer
             )}
           </div>
         </div>
-        {/* Health Distribution Bar */}
         <HealthDistributionBar 
           good={healthDist.good}
           atRisk={healthDist.at_risk}
@@ -340,18 +339,17 @@ export function PortfolioSummary({ metrics, isLoading, onOpenARR, onOpenCustomer
         />
       </button>
       
-      {/* Renewals Due - clickable, opens ARR Analysis */}
+      {/* Renewals Due */}
       <button
         onClick={onOpenARR}
         className={clsx(
-          'bg-white p-6 rounded-xl border border-slate-200 shadow-sm text-left transition-shadow',
+          'bg-white p-4 rounded-xl border border-slate-200 shadow-sm text-left transition-shadow',
           onOpenARR && 'hover:shadow-md cursor-pointer group'
         )}
       >
-        <div className="flex justify-between items-start mb-3">
+        <div className="flex justify-between items-start mb-2">
           <RenewalInfoLabel />
           <div className="flex items-center gap-2">
-            {/* Period Selector */}
             <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
               <Calendar className="w-3.5 h-3.5 text-primary" />
               <select
@@ -366,19 +364,19 @@ export function PortfolioSummary({ metrics, isLoading, onOpenARR, onOpenCustomer
               </select>
             </div>
             {onOpenARR && (
-              <ExternalLink className="w-3.5 h-3.5 text-slate-300 group-hover:text-primary transition-colors" />
+              <ExternalLink className="w-3 h-3 text-slate-300 group-hover:text-primary transition-colors" />
             )}
           </div>
         </div>
-        <div className="flex items-end gap-4">
+        <div className="flex items-end gap-3">
           {isLoading ? (
-            <div className="h-9 w-28 bg-slate-100 rounded animate-pulse" />
+            <div className="h-8 w-24 bg-slate-100 rounded animate-pulse" />
           ) : (
-            <h3 className="text-3xl font-bold text-slate-900 tracking-tight">
+            <h3 className="text-2xl font-bold text-slate-900 tracking-tight">
               {formatEUR(renewalsArr)}
             </h3>
           )}
-          <p className="text-sm text-slate-400 font-medium mb-1">
+          <p className="text-xs text-slate-400 font-medium mb-0.5">
             {renewalsCount} account{renewalsCount !== 1 ? 's' : ''}
           </p>
         </div>
