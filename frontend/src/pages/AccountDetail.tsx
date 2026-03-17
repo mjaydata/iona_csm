@@ -1,15 +1,16 @@
 import { useMemo, useState } from 'react'
 import { 
   ArrowLeft, 
+  Bell,
   Calendar, 
   FileText, 
-  RefreshCw,
   Loader2
 } from 'lucide-react'
 import { useAccountFullDetail } from '../hooks/useAccounts'
 import { useLayoutPersistence } from '../hooks/useLayoutPersistence'
 import { DraggableWidgetGrid, getDefaultLayout } from '../components/DraggableWidgetGrid'
 import { Badge } from '../components/widgets'
+import { WeeklySummaryDrawer } from '../components/WeeklySummaryDrawer'
 import { clsx } from 'clsx'
 
 interface AccountDetailProps {
@@ -45,6 +46,9 @@ export function AccountDetail({ accountId, onBack }: AccountDetailProps) {
   
   // QBR generation state
   const [qbrGenerating, setQbrGenerating] = useState(false)
+  
+  // Weekly summary drawer
+  const [summaryOpen, setSummaryOpen] = useState(false)
   
   // Generate QBR handler - directly generates PowerPoint
   const handleGenerateQBR = async () => {
@@ -191,12 +195,12 @@ export function AccountDetail({ accountId, onBack }: AccountDetailProps) {
           {/* Right: Actions */}
           <div className="flex items-center gap-2">
             <button
-              onClick={() => refetch()}
+              onClick={() => setSummaryOpen(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors"
-              title="Refresh data"
+              title="Weekly activity summary"
             >
-              <RefreshCw className={clsx('w-3.5 h-3.5', isLoading && 'animate-spin')} />
-              Refresh
+              <Bell className="w-3.5 h-3.5" />
+              Activity
             </button>
             
             <button 
@@ -236,6 +240,14 @@ export function AccountDetail({ accountId, onBack }: AccountDetailProps) {
         isLoading={isLoading}
         layout={layout}
         onLayoutChange={setLayout}
+      />
+
+      {/* Weekly Summary Drawer */}
+      <WeeklySummaryDrawer
+        accountId={accountId}
+        accountName={account?.name || ''}
+        isOpen={summaryOpen}
+        onClose={() => setSummaryOpen(false)}
       />
     </div>
   )

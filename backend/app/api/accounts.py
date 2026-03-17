@@ -13,6 +13,10 @@ from ..models.schemas import (
     AccountListResponse,
     AccountStatus,
     HealthScoreDetail,
+    HealthScoreHistoryResponse,
+    HealthScoreHistoryPoint,
+    WeeklySummaryResponse,
+    WeeklySummaryItem,
     SupportTicketsResponse,
 )
 from ..services.databricks import DatabricksService, get_databricks_service
@@ -121,6 +125,58 @@ async def update_account_status(
     return {"message": "Status updated", "account_id": account_id, "status": status}
 
 
+@router.get("/{account_id}/weekly-summary", response_model=WeeklySummaryResponse)
+async def get_weekly_summary(
+    account_id: str,
+    weeks: int = Query(default=12, ge=1, le=52),
+    offset: int = Query(default=0, ge=0),
+    db: DatabricksService = Depends(get_databricks_service),
+) -> WeeklySummaryResponse:
+    """Get pre-computed weekly activity summaries for an account."""
+    try:
+        account = db.get_account_by_id(account_id)
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+
+        result = db.get_weekly_summaries(account_id, limit=weeks, offset=offset)
+        return WeeklySummaryResponse(
+            account_id=account_id,
+            account_name=account.name,
+            weeks=[WeeklySummaryItem(**w) for w in result["weeks"]],
+            total_weeks=result["total_weeks"],
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"get_weekly_summary error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{account_id}/health-score/history", response_model=HealthScoreHistoryResponse)
+async def get_health_score_history(
+    account_id: str,
+    db: DatabricksService = Depends(get_databricks_service),
+) -> HealthScoreHistoryResponse:
+    """Get health score history for trend visualization."""
+    try:
+        account = db.get_account_by_id(account_id)
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+        
+        history_data = db.get_health_score_history(account_id)
+        logger.info(f"Health history for {account_id}: {len(history_data)} points")
+        return HealthScoreHistoryResponse(
+            account_id=account_id,
+            account_name=account.name,
+            history=[HealthScoreHistoryPoint(**h) for h in history_data],
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"get_health_score_history error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/{account_id}/health-score", response_model=HealthScoreDetail)
 async def get_health_score_detail(
     account_id: str,
@@ -137,7 +193,6 @@ async def get_health_score_detail(
         if not account:
             raise HTTPException(status_code=404, detail="Account not found")
         
-        # Calculate full health score detail
         health_detail = db.get_health_score_detail_for_account(account.name, account.renewal_days)
         return health_detail
     except HTTPException:

@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { clsx } from 'clsx'
 import { ChevronDown, ChevronRight, Loader2, Info, X } from 'lucide-react'
 import type { Account, RenewalInfo } from '../types'
-import { getHealthScoreDetail, type HealthScoreDetail } from '../services/api'
+import { getHealthScoreDetail, getHealthScoreHistory, type HealthScoreDetail, type HealthScoreHistoryPoint } from '../services/api'
 
 interface AccountTableProps {
   accounts: Account[]
@@ -42,6 +42,146 @@ function HighlightedText({ text, searchTerm }: { text: string; searchTerm?: stri
   } catch {
     return <>{text}</>
   }
+}
+
+/* ── Health Score Trend Chart (SVG) ── */
+type PeriodKey = '7D' | '30D' | '90D' | '6M' | '1Y' | 'All'
+const PERIODS: { key: PeriodKey; label: string; days: number | null }[] = [
+  { key: '7D', label: '7D', days: 7 },
+  { key: '30D', label: '30D', days: 30 },
+  { key: '90D', label: '90D', days: 90 },
+  { key: '6M', label: '6M', days: 180 },
+  { key: '1Y', label: '1Y', days: 365 },
+  { key: 'All', label: 'All', days: null },
+]
+
+function HealthScoreTrendChart({ accountId }: { accountId: string }) {
+  const [history, setHistory] = useState<HealthScoreHistoryPoint[]>([])
+  const [loading, setLoading] = useState(true)
+  const [period, setPeriod] = useState<PeriodKey>('All')
+
+  useEffect(() => {
+    getHealthScoreHistory(accountId)
+      .then(res => setHistory(res.history))
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [accountId])
+
+  const filtered = useMemo(() => {
+    const p = PERIODS.find(pp => pp.key === period)
+    if (!p || !p.days || history.length === 0) return history
+    const cutoff = new Date()
+    cutoff.setDate(cutoff.getDate() - p.days)
+    const cutoffStr = cutoff.toISOString().slice(0, 10)
+    return history.filter(h => h.score_date >= cutoffStr)
+  }, [history, period])
+
+  // Auto-select best period based on available data
+  useEffect(() => {
+    if (history.length === 0) return
+    const days = history.length
+    if (days <= 7) setPeriod('All')
+    else if (days <= 30) setPeriod('30D')
+    else if (days <= 90) setPeriod('90D')
+    else setPeriod('6M')
+  }, [history])
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-6">
+        <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
+        <span className="ml-2 text-xs text-slate-400">Loading trend...</span>
+      </div>
+    )
+  }
+
+  if (filtered.length < 2) {
+    return (
+      <div className="text-center py-4 text-xs text-slate-400">
+        {history.length === 0 ? 'No history available' : 'Not enough data for trend yet'}
+      </div>
+    )
+  }
+
+  const scores = filtered.map(h => h.health_score)
+  const minScore = Math.max(0, Math.min(...scores) - 10)
+  const maxScore = Math.min(100, Math.max(...scores) + 10)
+  const range = maxScore - minScore || 1
+
+  const W = 340
+  const H = 90
+  const padX = 0
+  const padY = 8
+  const chartW = W - padX * 2
+  const chartH = H - padY * 2
+
+  const points = filtered.map((h, i) => {
+    const x = padX + (i / (filtered.length - 1)) * chartW
+    const y = padY + chartH - ((h.health_score - minScore) / range) * chartH
+    return { x, y, ...h }
+  })
+
+  const pathD = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ')
+  const areaD = pathD + ` L${points[points.length - 1].x},${H} L${points[0].x},${H} Z`
+
+  const first = filtered[0].health_score
+  const last = filtered[filtered.length - 1].health_score
+  const delta = last - first
+  const lineColor = last >= 70 ? '#10b981' : last >= 40 ? '#f59e0b' : '#ef4444'
+
+  const formatDate = (d: string) => {
+    const dt = new Date(d + 'T00:00:00')
+    return dt.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Score Trend</div>
+        <div className="flex items-center gap-1">
+          {PERIODS.map(p => (
+            <button
+              key={p.key}
+              onClick={() => setPeriod(p.key)}
+              className={clsx(
+                'px-1.5 py-0.5 text-[10px] font-medium rounded transition-colors',
+                period === p.key
+                  ? 'bg-slate-800 text-white'
+                  : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'
+              )}
+            >
+              {p.label}
+            </button>
+          ))}
+          {delta !== 0 && (
+            <span className={clsx(
+              'ml-1.5 text-[10px] font-bold px-1.5 py-0.5 rounded',
+              delta > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'
+            )}>
+              {delta > 0 ? '+' : ''}{delta}
+            </span>
+          )}
+        </div>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 90 }}>
+        {/* Grid lines at 40 and 70 thresholds */}
+        <line x1={padX} y1={padY + chartH - ((70 - minScore) / range) * chartH} x2={W - padX} y2={padY + chartH - ((70 - minScore) / range) * chartH} stroke="#d1d5db" strokeWidth="0.5" strokeDasharray="4 3" />
+        <line x1={padX} y1={padY + chartH - ((40 - minScore) / range) * chartH} x2={W - padX} y2={padY + chartH - ((40 - minScore) / range) * chartH} stroke="#d1d5db" strokeWidth="0.5" strokeDasharray="4 3" />
+        {/* Area fill */}
+        <path d={areaD} fill={lineColor} opacity={0.08} />
+        {/* Line */}
+        <path d={pathD} fill="none" stroke={lineColor} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        {/* Data points */}
+        {points.map((p, i) => (
+          <circle key={i} cx={p.x} cy={p.y} r={filtered.length <= 30 ? 3 : 1.5} fill="white" stroke={lineColor} strokeWidth="1.5" />
+        ))}
+      </svg>
+      <div className="flex justify-between text-[10px] text-slate-400 mt-0.5 px-0.5">
+        <span>{formatDate(filtered[0].score_date)}</span>
+        <span>{formatDate(filtered[filtered.length - 1].score_date)}</span>
+      </div>
+    </div>
+  )
 }
 
 /* ── Health Badge with Click-to-Open Modal (fetches details on-demand) ── */
@@ -164,6 +304,11 @@ function HealthBadgeWithSignal({
                   <span>Good</span>
                 </div>
               </div>
+            </div>
+
+            {/* Score Trend */}
+            <div className="px-5 pt-4 pb-2 border-b border-slate-100">
+              <HealthScoreTrendChart accountId={accountId} />
             </div>
 
             {/* Factor Breakdown */}
@@ -755,24 +900,28 @@ export function AccountTable({
                 {groupedAccounts.map(group => (
                   <React.Fragment key={group.parentId}>
                     <tr
-                      className="hover:bg-slate-50 transition-colors cursor-pointer bg-slate-50/50"
+                      className="hover:bg-slate-50/80 transition-colors cursor-pointer border-b border-slate-100"
                       onClick={() => toggleGroup(group.parentId)}
                     >
-                      <td className="px-4 py-2" colSpan={5}>
-                        <div className="flex items-center gap-3">
-                          <button className="flex items-center justify-center w-5 h-5 text-slate-500 hover:text-slate-700">
+                      <td className="px-4 py-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <div className="flex-shrink-0 text-slate-400">
                             {expandedGroups.has(group.parentId) ? (
-                              <ChevronDown className="w-4 h-4" />
+                              <ChevronDown className="w-3.5 h-3.5" />
                             ) : (
-                              <ChevronRight className="w-4 h-4" />
+                              <ChevronRight className="w-3.5 h-3.5" />
                             )}
-                          </button>
-                          <span className="font-semibold text-slate-800">{group.parentName}</span>
-                          <span className="text-sm text-slate-500">
-                            ({group.children.length} {group.children.length === 1 ? 'account' : 'accounts'})
+                          </div>
+                          <span className="font-semibold text-sm text-slate-800 truncate">{group.parentName}</span>
+                          <span className="flex-shrink-0 text-[11px] text-slate-400 font-medium">
+                            {group.children.length}
                           </span>
                         </div>
                       </td>
+                      <td className="px-2 py-2" />
+                      <td className="px-2 py-2" />
+                      <td className="px-2 py-2" />
+                      <td className="px-3 pr-6 py-2" />
                     </tr>
                     {expandedGroups.has(group.parentId) &&
                       group.children.map(account => (

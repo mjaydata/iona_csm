@@ -96,6 +96,51 @@ export async function getHealthScoreDetail(accountId: string): Promise<HealthSco
   return data
 }
 
+export interface HealthScoreHistoryPoint {
+  score_date: string
+  health_score: number
+  health_category: string
+}
+
+export interface HealthScoreHistoryResponse {
+  account_id: string
+  account_name: string
+  history: HealthScoreHistoryPoint[]
+}
+
+export async function getHealthScoreHistory(accountId: string): Promise<HealthScoreHistoryResponse> {
+  const { data } = await api.get<HealthScoreHistoryResponse>(`/accounts/${accountId}/health-score/history`)
+  return data
+}
+
+export interface WeeklySummaryItem {
+  account_id: string
+  account_name: string
+  week_start: string
+  week_end: string
+  narrative: string
+  generated_at: string | null
+}
+
+export interface WeeklySummaryResponse {
+  account_id: string
+  account_name: string
+  weeks: WeeklySummaryItem[]
+  total_weeks: number
+}
+
+export async function getWeeklySummary(
+  accountId: string,
+  weeks: number = 12,
+  offset: number = 0
+): Promise<WeeklySummaryResponse> {
+  const { data } = await api.get<WeeklySummaryResponse>(
+    `/accounts/${accountId}/weekly-summary`,
+    { params: { weeks, offset } }
+  )
+  return data
+}
+
 export interface GetSupportTicketsParams {
   page?: number
   page_size?: number

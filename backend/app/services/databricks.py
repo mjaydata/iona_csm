@@ -1063,28 +1063,30 @@ class DatabricksService:
         account_type: Optional[str] = None
     ) -> Optional[Tuple[int, int, int]]:
         """
-        Get health category counts from pre-computed table.
+        Get health category counts from pre-computed table, optionally filtered by account_type.
         Returns (good_count, at_risk_count, critical_count) or None if table not available.
-        
-        Note: account_type filter is ignored since pre-computed table has all accounts.
-        This is fast (~100ms) vs SQL fallback (~20s).
         """
         HEALTH_SCORES_TABLE = "silver.silver_layer.account_health_scores_history"
         
         try:
             cursor = conn.cursor()
             
-            # Always use pre-computed counts (fast and accurate)
-            # account_type filter not supported - returns all accounts
-            # If account_type filtering needed, add it to the Databricks notebook
+            type_join = ""
+            type_filter = ""
+            if account_type:
+                safe_type = account_type.replace("'", "''")
+                type_join = f"JOIN {DIM_CUSTOMERS_TABLE} c ON h.account_id = c.account_id AND c._fivetran_deleted = false"
+                type_filter = f"AND c.account_type = '{safe_type}'"
             
             query = f"""
                 SELECT 
-                    SUM(CASE WHEN health_category = 'Good' THEN 1 ELSE 0 END) as good_count,
-                    SUM(CASE WHEN health_category = 'At Risk' THEN 1 ELSE 0 END) as at_risk_count,
-                    SUM(CASE WHEN health_category = 'Critical' THEN 1 ELSE 0 END) as critical_count
-                FROM {HEALTH_SCORES_TABLE}
-                WHERE score_date = (SELECT MAX(score_date) FROM {HEALTH_SCORES_TABLE})
+                    SUM(CASE WHEN h.health_category = 'Good' THEN 1 ELSE 0 END) as good_count,
+                    SUM(CASE WHEN h.health_category = 'At Risk' THEN 1 ELSE 0 END) as at_risk_count,
+                    SUM(CASE WHEN h.health_category = 'Critical' THEN 1 ELSE 0 END) as critical_count
+                FROM {HEALTH_SCORES_TABLE} h
+                {type_join}
+                WHERE h.score_date = (SELECT MAX(score_date) FROM {HEALTH_SCORES_TABLE})
+                {type_filter}
             """
             
             cursor.execute(query)
@@ -1095,7 +1097,7 @@ class DatabricksService:
                 good = int(row[0]) if row[0] else 0
                 at_risk = int(row[1]) if row[1] else 0
                 critical = int(row[2]) if row[2] else 0
-                logger.info(f"Health counts from precomputed: good={good}, at_risk={at_risk}, critical={critical}")
+                logger.info(f"Health counts from precomputed (type={account_type}): good={good}, at_risk={at_risk}, critical={critical}")
                 return good, at_risk, critical
             
             return None
@@ -1104,23 +1106,32 @@ class DatabricksService:
             logger.warning(f"Failed to get health counts from precomputed table: {e}")
             return None
 
-    def _get_usage_decline_count_from_precomputed(self, conn) -> int:
+    def _get_usage_decline_count_from_precomputed(self, conn, account_type: Optional[str] = None) -> int:
         """
-        Get count of accounts with significant usage decline (>=20% drop).
-        Uses pre-computed table for fast lookup.
+        Get count of accounts with significant usage decline (>=20% drop),
+        optionally filtered by account_type.
         """
         HEALTH_SCORES_TABLE = "silver.silver_layer.account_health_scores_history"
         
         try:
             cursor = conn.cursor()
             
+            type_join = ""
+            type_filter = ""
+            if account_type:
+                safe_type = account_type.replace("'", "''")
+                type_join = f"JOIN {DIM_CUSTOMERS_TABLE} c ON h.account_id = c.account_id AND c._fivetran_deleted = false"
+                type_filter = f"AND c.account_type = '{safe_type}'"
+            
             query = f"""
                 SELECT COUNT(*) 
-                FROM {HEALTH_SCORES_TABLE}
-                WHERE score_date = (SELECT MAX(score_date) FROM {HEALTH_SCORES_TABLE})
-                  AND has_pendo = true
-                  AND previous_visitors > 0
-                  AND ((current_visitors - previous_visitors) * 100.0 / previous_visitors) <= -20
+                FROM {HEALTH_SCORES_TABLE} h
+                {type_join}
+                WHERE h.score_date = (SELECT MAX(score_date) FROM {HEALTH_SCORES_TABLE})
+                  AND h.has_pendo = true
+                  AND h.previous_visitors > 0
+                  AND ((h.current_visitors - h.previous_visitors) * 100.0 / h.previous_visitors) <= -20
+                  {type_filter}
             """
             
             cursor.execute(query)
@@ -1128,12 +1139,100 @@ class DatabricksService:
             cursor.close()
             
             count = int(row[0]) if row and row[0] else 0
-            logger.info(f"Usage decline count (>=20% drop): {count}")
+            logger.info(f"Usage decline count (>=20% drop, type={account_type}): {count}")
             return count
             
         except Exception as e:
             logger.warning(f"Failed to get usage decline count: {e}")
             return 0
+
+    def get_health_score_history(self, account_id: str) -> list:
+        """
+        Fetch all historical health scores for a given account.
+        Returns list of {score_date, health_score, health_category} sorted by date ascending.
+        """
+        HEALTH_SCORES_TABLE = "silver.silver_layer.account_health_scores_history"
+        
+        with self.get_connection() as conn:
+            if conn is None:
+                logger.warning("No DB connection for health score history")
+                return []
+            try:
+                cursor = conn.cursor()
+                
+                safe_id = account_id.replace("'", "''")
+                query = f"""
+                    SELECT score_date, health_score, health_category
+                    FROM {HEALTH_SCORES_TABLE}
+                    WHERE account_id = '{safe_id}'
+                    ORDER BY score_date ASC
+                """
+                
+                cursor.execute(query)
+                rows = cursor.fetchall()
+                cursor.close()
+                
+                history = []
+                for row in rows:
+                    history.append({
+                        "score_date": row[0],
+                        "health_score": int(row[1]) if row[1] is not None else 0,
+                        "health_category": row[2] or "Good",
+                    })
+                
+                logger.info(f"Health score history for {account_id}: {len(history)} data points")
+                return history
+                
+            except Exception as e:
+                logger.warning(f"Failed to get health score history for {account_id}: {e}")
+                return []
+
+    def get_weekly_summaries(self, account_id: str, limit: int = 12, offset: int = 0) -> dict:
+        """Fetch pre-computed weekly summaries for an account."""
+        SUMMARIES_TABLE = "silver.silver_layer.account_weekly_summaries"
+
+        with self.get_connection() as conn:
+            if conn is None:
+                logger.warning("No DB connection for weekly summaries")
+                return {"weeks": [], "total_weeks": 0}
+            try:
+                cursor = conn.cursor()
+                safe_id = account_id.replace("'", "''")
+
+                cursor.execute(f"""
+                    SELECT COUNT(*) FROM {SUMMARIES_TABLE}
+                    WHERE account_id = '{safe_id}'
+                """)
+                total = cursor.fetchone()[0] or 0
+
+                cursor.execute(f"""
+                    SELECT account_id, account_name, week_start, week_end,
+                           narrative, generated_at
+                    FROM {SUMMARIES_TABLE}
+                    WHERE account_id = '{safe_id}'
+                    ORDER BY week_start DESC
+                    LIMIT {int(limit)} OFFSET {int(offset)}
+                """)
+                rows = cursor.fetchall()
+                cursor.close()
+
+                weeks = []
+                for row in rows:
+                    weeks.append({
+                        "account_id": row[0],
+                        "account_name": row[1],
+                        "week_start": row[2],
+                        "week_end": row[3],
+                        "narrative": row[4] or "",
+                        "generated_at": row[5],
+                    })
+
+                logger.info(f"Weekly summaries for {account_id}: {len(weeks)} of {total}")
+                return {"weeks": weeks, "total_weeks": total}
+
+            except Exception as e:
+                logger.warning(f"Failed to get weekly summaries for {account_id}: {e}")
+                return {"weeks": [], "total_weeks": 0}
 
     def _calculate_at_risk_count_by_health_score(
         self, 
@@ -1596,7 +1695,7 @@ class DatabricksService:
                 cursor.close()
 
                 # Get usage decline count from pre-computed table
-                usage_decline = self._get_usage_decline_count_from_precomputed(conn)
+                usage_decline = self._get_usage_decline_count_from_precomputed(conn, account_type)
 
                 metrics = MetricsSummary(
                     total_accounts=total,

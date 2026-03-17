@@ -33,6 +33,38 @@ class HealthScoreDetail(BaseModel):
     scoring_version: str = "rule-based-v1.0"
 
 
+class HealthScoreHistoryPoint(BaseModel):
+    """Single data point in health score history."""
+    score_date: date
+    health_score: int
+    health_category: str
+
+
+class HealthScoreHistoryResponse(BaseModel):
+    """Health score history for trend visualization."""
+    account_id: str
+    account_name: str
+    history: List[HealthScoreHistoryPoint] = []
+
+
+class WeeklySummaryItem(BaseModel):
+    """Single week's activity summary."""
+    account_id: str
+    account_name: str
+    week_start: date
+    week_end: date
+    narrative: str
+    generated_at: Optional[datetime] = None
+
+
+class WeeklySummaryResponse(BaseModel):
+    """Paginated weekly summaries for an account."""
+    account_id: str
+    account_name: str
+    weeks: List[WeeklySummaryItem] = []
+    total_weeks: int = 0
+
+
 class AccountStatus(str, Enum):
     """Account status values."""
     NEEDS_ATTENTION = "Needs Attention"
