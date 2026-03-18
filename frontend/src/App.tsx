@@ -16,6 +16,7 @@ const CURRENT_USER = {
 }
 
 const GENIE_URL = 'https://dbc-97a2feb3-3e52.cloud.databricks.com/genie/rooms/01f099415bb81fdca08095d22b5c146a?o=1057997375544232'
+const NPS_DASHBOARD_URL = 'https://dbc-97a2feb3-3e52.cloud.databricks.com/embed/dashboardsv3/01f122cf0fcd1a4fa2ad740905887fa2?o=1057997375544232'
 
 // Base account type options
 const BASE_ACCOUNT_TYPES = [
@@ -108,6 +109,14 @@ function App() {
     popup?.focus()
   }, [])
 
+  const PAGE_TITLES: Record<NavItem, string> = {
+    'home': 'Portfolio Summary',
+    'csm-management': 'CSM Assignments',
+    'actions': 'Actions',
+    'nps-satisfaction': 'NPS & Satisfaction',
+    'chat': 'Ask Genie',
+  }
+
   const isHome = activeNav === 'home'
   const homeSubPage = isHome && selectedAccountId ? 'account'
     : isHome && showARRAnalysis ? 'arr'
@@ -169,6 +178,17 @@ function App() {
             <Actions />
           </main>
         )}
+
+        {activeNav === 'nps-satisfaction' && (
+          <main className="flex-1 overflow-hidden">
+            <iframe
+              src={NPS_DASHBOARD_URL}
+              title="NPS & Satisfaction"
+              className="w-full h-full border-0"
+              allow="fullscreen"
+            />
+          </main>
+        )}
       </>
     )
   }
@@ -195,6 +215,7 @@ function App() {
           accountTypeFilter={accountTypeFilter}
           onAccountTypeChange={setAccountTypeFilter}
           accountTypeOptions={accountTypeOptions}
+          pageTitle={PAGE_TITLES[activeNav]}
         />
         {renderPage()}
       </div>

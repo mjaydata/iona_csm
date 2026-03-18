@@ -14,6 +14,7 @@ interface HeaderProps {
   accountTypeFilter?: string
   onAccountTypeChange?: (value: string) => void
   accountTypeOptions?: AccountTypeOption[]
+  pageTitle?: string
 }
 
 export function Header({ 
@@ -22,7 +23,8 @@ export function Header({
   showSearch = true,
   accountTypeFilter,
   onAccountTypeChange,
-  accountTypeOptions = []
+  accountTypeOptions = [],
+  pageTitle = 'Portfolio Summary'
 }: HeaderProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [dropdownOpen, setDropdownOpen] = useState(false)
@@ -64,7 +66,7 @@ export function Header({
     <header className="sticky top-0 z-[60] bg-white/80 backdrop-blur-md border-b border-slate-200 px-8 py-3 flex items-center justify-between">
       {/* Left side - Page Title */}
       <div className="flex items-center gap-3">
-        <h2 className="text-lg font-bold text-slate-900">Portfolio Summary</h2>
+        <h2 className="text-lg font-bold text-slate-900">{pageTitle}</h2>
       </div>
 
       {/* Center - Search */}
