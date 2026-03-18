@@ -47,6 +47,35 @@ class HealthScoreHistoryResponse(BaseModel):
     history: List[HealthScoreHistoryPoint] = []
 
 
+class AccountMovement(BaseModel):
+    """An account that changed health category between two days."""
+    account_id: str
+    account_name: str
+    prev_score: int
+    curr_score: int
+    prev_category: str
+    curr_category: str
+    explanation: str = ""
+    recent_scores: List[int] = []
+
+
+class HealthChangeDay(BaseModel):
+    """Health distribution snapshot for one day with movements from prior day."""
+    date: date
+    prev_date: Optional[date] = None
+    good: int = 0
+    at_risk: int = 0
+    critical: int = 0
+    improved: List[AccountMovement] = []
+    worsened: List[AccountMovement] = []
+
+
+class HealthChangesResponse(BaseModel):
+    """Health distribution history with daily account movements."""
+    days: List[HealthChangeDay] = []
+    today_delta: Optional[dict] = None
+
+
 class WeeklySummaryItem(BaseModel):
     """Single week's activity summary."""
     account_id: str
@@ -145,16 +174,20 @@ class MetricsSummary(BaseModel):
     """Dashboard KPI metrics."""
     # Portfolio Summary metrics
     total_accounts: int
-    total_arr: float = 0.0  # Total Annual Recurring Revenue
-    renewals_arr: float = 0.0  # Renewal ARR in EUR from fct_contracts
-    renewals_count: int = 0  # Distinct accounts up for renewal
+    total_arr: float = 0.0
+    renewals_arr: float = 0.0
+    renewals_count: int = 0
     health_distribution: HealthDistribution = HealthDistribution()
-    
+
     # Action KPIs
     at_risk_count: int
     renewals_90_days: int
     usage_decline_count: int
     expansion_signals: int
+
+    # Day-over-day deltas (vs yesterday)
+    at_risk_delta: Optional[int] = None
+    usage_decline_delta: Optional[int] = None
 
 
 class TaskCreate(BaseModel):

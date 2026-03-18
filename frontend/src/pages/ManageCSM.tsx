@@ -17,6 +17,7 @@ import {
 import { clsx } from 'clsx'
 import { useCSMStats, useCSMs, useAccountsWithCSM } from '../hooks/useCSM'
 import { CSMProfilePanel } from '../components/CSMProfilePanel'
+import { healthLabel } from '../utils/healthLabels'
 import type { CSM, AccountWithCSM, CSMStatus, RenewalInfo } from '../types'
 
 // Utility to format currency
@@ -40,7 +41,7 @@ function HealthBadge({ health }: { health: string }) {
   return (
     <span className={clsx('inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium', config.bg, config.text)}>
       {Icon && <Icon className="w-3 h-3" />}
-      {health}
+      {healthLabel(health)}
     </span>
   )
 }
@@ -368,7 +369,7 @@ function CSMRow({
                       const atRisk = accountsData.accounts.filter(a => a.health === 'At Risk' || a.health === 'Critical').length
                       return atRisk > 0 ? (
                         <span className="text-xs font-medium text-amber-600 flex items-center gap-1">
-                          <AlertTriangle className="w-3 h-3" /> {atRisk} at risk
+                          <AlertTriangle className="w-3 h-3" /> {atRisk} needs attention
                         </span>
                       ) : null
                     })()}
@@ -772,7 +773,7 @@ export function ManageCSM() {
                       <th className="text-left py-3 px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">CSM</th>
                       <th className="text-center py-3 px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Accounts</th>
                       <th className="text-right py-3 px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Total ARR</th>
-                      <th className="text-center py-3 px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">At Risk</th>
+                      <th className="text-center py-3 px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Needs Attention</th>
                       <th className="text-center py-3 px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Workload</th>
                     </tr>
                   </thead>

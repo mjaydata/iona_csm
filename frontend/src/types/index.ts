@@ -78,6 +78,10 @@ export interface MetricsSummary {
   renewals_90_days: number
   usage_decline_count: number
   expansion_signals: number
+
+  // Day-over-day deltas
+  at_risk_delta?: number | null
+  usage_decline_delta?: number | null
 }
 
 export interface Task {

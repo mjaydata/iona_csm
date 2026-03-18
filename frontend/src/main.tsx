@@ -4,6 +4,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import App from './App'
 import './index.css'
 
+console.info('IONA CX v1.1')
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {

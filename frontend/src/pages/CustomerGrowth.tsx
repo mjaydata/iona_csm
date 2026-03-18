@@ -21,6 +21,7 @@ interface CustomerGrowthProps {
   onBack: () => void
   onAccountClick?: (accountId: string) => void
   accountType?: string
+  hideHeader?: boolean
 }
 
 // ── Error Boundary ──────────────────────────────────────────
@@ -1112,7 +1113,7 @@ function EventTimeline({
 
 // ── Main Page ────────────────────────────────────────────────
 
-function CustomerGrowthInner({ onBack, onAccountClick, accountType }: CustomerGrowthProps) {
+function CustomerGrowthInner({ onBack, onAccountClick, accountType, hideHeader }: CustomerGrowthProps) {
   const acctTypeParam = accountType && accountType !== 'all' ? accountType : undefined
   const { data, isLoading } = useCustomerGrowth(acctTypeParam)
 
@@ -1220,20 +1221,22 @@ function CustomerGrowthInner({ onBack, onAccountClick, accountType }: CustomerGr
     <div className="h-full overflow-auto">
       <div className="max-w-7xl mx-auto p-6 pb-12 space-y-5">
         {/* Header */}
-        <div className="flex items-center gap-4">
-          <button
-            onClick={onBack}
-            className="w-8 h-8 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 flex items-center justify-center transition-colors"
-          >
-            <ArrowLeft className="w-4 h-4 text-slate-600" />
-          </button>
-          <div>
-            <h1 className="text-xl font-bold text-slate-900">Customer Growth</h1>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Portfolio acquisition trends &amp; YoY analysis
-            </p>
+        {!hideHeader && (
+          <div className="flex items-center gap-4">
+            <button
+              onClick={onBack}
+              className="w-8 h-8 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 flex items-center justify-center transition-colors"
+            >
+              <ArrowLeft className="w-4 h-4 text-slate-600" />
+            </button>
+            <div>
+              <h1 className="text-xl font-bold text-slate-900">Customer Growth</h1>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Portfolio acquisition trends &amp; YoY analysis
+              </p>
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Summary Cards */}
         <div className="grid grid-cols-3 gap-3">

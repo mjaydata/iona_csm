@@ -356,7 +356,7 @@ export function CSMProfilePanel({ csm, isOpen, onClose }: CSMProfilePanelProps) 
               />
               <ProfileStatCard
                 icon={AlertTriangle}
-                label="At Risk"
+                label="Needs Attention"
                 value={profile.at_risk_accounts}
                 color={profile.at_risk_accounts > 2 ? 'rose' : 'amber'}
               />

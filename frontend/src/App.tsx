@@ -4,7 +4,7 @@ import { ManageCSM } from './pages/ManageCSM'
 import { Actions } from './pages/Actions'
 import { AccountDetail } from './pages/AccountDetail'
 import ARRAnalysis from './pages/ARRAnalysis'
-import CustomerGrowth from './pages/CustomerGrowth'
+import PortfolioAnalytics from './pages/PortfolioAnalytics'
 import { Header } from './components/Header'
 import { Sidebar, type NavItem } from './components/Sidebar'
 import { useAccountTypeCounts } from './hooks/useAccounts'
@@ -142,10 +142,11 @@ function App() {
 
         {homeSubPage === 'growth' && (
           <main className="flex-1 overflow-auto">
-            <CustomerGrowth 
+            <PortfolioAnalytics 
               onBack={handleCloseCustomerGrowth} 
               onAccountClick={handleAccountClick}
               accountType={accountTypeFilter}
+              initialTab="health"
             />
           </main>
         )}

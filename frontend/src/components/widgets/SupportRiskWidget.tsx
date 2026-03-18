@@ -518,12 +518,12 @@ export function SupportRiskWidget({ data, isLoading, onHide, collapsed, onCollap
             <ResolutionDistributionChart stats={data.resolution_stats} />
           ) : (
             <div className="flex items-center justify-between py-2 px-3 bg-slate-50 rounded-lg">
-              <div className="flex items-center gap-2">
-                <Clock className="w-4 h-4 text-slate-400" />
-                <span className="text-xs text-slate-600">Avg Resolution</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-semibold text-slate-700">
+            <div className="flex items-center gap-2">
+              <Clock className="w-4 h-4 text-slate-400" />
+              <span className="text-xs text-slate-600">Avg Resolution</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-slate-700">
                   {(data.avg_resolution_hours / 24).toFixed(1)} days
                 </span>
                 <span title={getTrendTooltip(data.ticket_trend)}>
@@ -624,7 +624,7 @@ export function SupportRiskWidget({ data, isLoading, onHide, collapsed, onCollap
           )}
 
           {/* All Tickets with Pagination */}
-          <div>
+            <div>
             <div className="flex items-center justify-between mb-2">
               <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
                 {hasActiveFilters 
@@ -641,14 +641,14 @@ export function SupportRiskWidget({ data, isLoading, onHide, collapsed, onCollap
                   {tickets.map((ticket) => (
                     <TicketCard key={ticket.id} ticket={ticket} />
                   ))}
-                </div>
+                    </div>
                 
                 {/* Pagination Controls */}
                 {totalPages > 1 && (
                   <div className="flex items-center justify-between mt-3 pt-3 border-t border-slate-100">
                     <span className="text-[10px] text-slate-500">
                       Page {currentPage} of {totalPages}
-                    </span>
+                      </span>
                     <div className="flex items-center gap-1">
                       <button
                         onClick={() => setCurrentPage(p => Math.max(1, p - 1))}

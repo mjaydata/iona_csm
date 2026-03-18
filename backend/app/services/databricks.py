@@ -1187,6 +1187,207 @@ class DatabricksService:
                 logger.warning(f"Failed to get health score history for {account_id}: {e}")
                 return []
 
+    @staticmethod
+    def _explain_health_movement(prev: dict, curr: dict) -> str:
+        """Generate a deterministic explanation of why an account's health category changed."""
+        reasons = []
+
+        def _renewal_deduction(rd):
+            if rd <= 30: return 25
+            if rd <= 60: return 18
+            if rd <= 90: return 12
+            if rd <= 180: return 5
+            return 0
+
+        def _pendo_deduction(cv, pv, has_pendo):
+            if not has_pendo: return 0
+            if pv > 0 and cv == 0: return 40
+            if pv > 0:
+                pct = ((cv - pv) / pv) * 100
+                if pct <= -50: return 35
+                if pct <= -30: return 25
+                if pct <= -10: return 12
+            elif cv == 0 and pv == 0: return 20
+            return 0
+
+        def _freshdesk_deduction(crit, high):
+            return min(35, (20 if crit > 0 else 0) + min(10, high * 5))
+
+        prev_ren = _renewal_deduction(prev.get("renewal_days", 999))
+        curr_ren = _renewal_deduction(curr.get("renewal_days", 999))
+        ren_delta = curr_ren - prev_ren
+
+        prev_pendo = _pendo_deduction(prev.get("current_visitors", 0), prev.get("previous_visitors", 0), prev.get("has_pendo", False))
+        curr_pendo = _pendo_deduction(curr.get("current_visitors", 0), curr.get("previous_visitors", 0), curr.get("has_pendo", False))
+        pendo_delta = curr_pendo - prev_pendo
+
+        prev_fd = _freshdesk_deduction(prev.get("open_critical", 0), prev.get("open_high", 0))
+        curr_fd = _freshdesk_deduction(curr.get("open_critical", 0), curr.get("open_high", 0))
+        fd_delta = curr_fd - prev_fd
+
+        if ren_delta != 0:
+            prev_rd = prev.get("renewal_days", 999)
+            curr_rd = curr.get("renewal_days", 999)
+            pts = abs(ren_delta)
+            if ren_delta < 0:
+                if curr_rd > 180:
+                    reasons.append(f"Renewal risk cleared — now {curr_rd}d away (+{pts}pts)")
+                else:
+                    reasons.append(f"Renewal pressure eased — {prev_rd}d → {curr_rd}d (+{pts}pts)")
+            else:
+                reasons.append(f"Renewal approaching — {prev_rd}d → {curr_rd}d (-{pts}pts)")
+
+        if pendo_delta != 0:
+            cv = curr.get("current_visitors", 0)
+            pv = curr.get("previous_visitors", 0)
+            pts = abs(pendo_delta)
+            if pendo_delta < 0:
+                reasons.append(f"Usage decline narrowed below penalty threshold — visitors {pv} → {cv} (+{pts}pts)")
+            else:
+                if cv == 0 and pv > 0:
+                    reasons.append(f"Product usage dropped to zero from {pv} visitors (-{pts}pts)")
+                else:
+                    reasons.append(f"Product usage declined — visitors {pv} → {cv} (-{pts}pts)")
+
+        if fd_delta != 0:
+            pc = prev.get("open_critical", 0)
+            ph = prev.get("open_high", 0)
+            cc = curr.get("open_critical", 0)
+            ch = curr.get("open_high", 0)
+            pts = abs(fd_delta)
+            if fd_delta < 0:
+                parts = []
+                if pc > cc: parts.append(f"critical {pc}→{cc}")
+                if ph > ch: parts.append(f"high {ph}→{ch}")
+                reasons.append(f"Support tickets resolved — {', '.join(parts) if parts else f'{pc}c/{ph}h → {cc}c/{ch}h'} (+{pts}pts)")
+            else:
+                parts = []
+                if cc > pc: parts.append(f"{cc} critical opened")
+                if ch > ph: parts.append(f"{ch - ph} new high priority")
+                reasons.append(f"Support escalation — {', '.join(parts) if parts else f'{cc} critical/{ch} high open'} (-{pts}pts)")
+
+        if not reasons:
+            reasons.append("Score factors shifted across category thresholds")
+
+        return ". ".join(reasons)
+
+    def get_health_distribution_changes(self, days: int = 30, account_type: Optional[str] = None) -> dict:
+        """Get daily health distribution snapshots and account movements between days."""
+        HEALTH_TABLE = "silver.silver_layer.account_health_scores_history"
+
+        with self.get_connection() as conn:
+            if conn is None:
+                logger.warning("No DB connection for health changes")
+                return {"days": [], "today_delta": None}
+            try:
+                cursor = conn.cursor()
+
+                type_join = ""
+                type_filter = ""
+                if account_type and account_type.lower() not in ("all", ""):
+                    safe_type = self._sql_escape(account_type)
+                    type_join = f"JOIN {DIM_CUSTOMERS_TABLE} dc ON h.account_id = dc.account_id AND dc._fivetran_deleted = false"
+                    type_filter = f"AND dc.account_type = '{safe_type}'"
+
+                query = f"""
+                    SELECT h.score_date, h.account_id, h.account_name,
+                           h.health_score, h.health_category,
+                           h.renewal_days, h.current_visitors, h.previous_visitors,
+                           h.open_critical, h.open_high, h.has_pendo, h.has_freshdesk
+                    FROM {HEALTH_TABLE} h
+                    {type_join}
+                    WHERE h.score_date >= DATE_SUB(CURRENT_DATE(), {int(days) + 1})
+                    {type_filter}
+                    ORDER BY h.score_date ASC, h.account_name ASC
+                """
+                cursor.execute(query)
+                rows = cursor.fetchall()
+                cursor.close()
+
+                from collections import defaultdict
+                by_date = defaultdict(dict)
+                for row in rows:
+                    score_date = row[0]
+                    by_date[score_date][row[1]] = {
+                        "account_id": row[1],
+                        "account_name": row[2],
+                        "health_score": int(row[3]) if row[3] is not None else 0,
+                        "health_category": row[4] or "Good",
+                        "renewal_days": int(row[5]) if row[5] is not None else 999,
+                        "current_visitors": int(row[6]) if row[6] is not None else 0,
+                        "previous_visitors": int(row[7]) if row[7] is not None else 0,
+                        "open_critical": int(row[8]) if row[8] is not None else 0,
+                        "open_high": int(row[9]) if row[9] is not None else 0,
+                        "has_pendo": bool(row[10]) if row[10] is not None else False,
+                        "has_freshdesk": bool(row[11]) if row[11] is not None else False,
+                    }
+
+                sorted_dates = sorted(by_date.keys())
+                result_days = []
+
+                for i, d in enumerate(sorted_dates):
+                    accounts = by_date[d]
+                    good = sum(1 for a in accounts.values() if a["health_category"] == "Good")
+                    at_risk = sum(1 for a in accounts.values() if a["health_category"] == "At Risk")
+                    critical = sum(1 for a in accounts.values() if a["health_category"] == "Critical")
+
+                    improved = []
+                    worsened = []
+
+                    if i > 0:
+                        prev_d = sorted_dates[i - 1]
+                        prev_accounts = by_date[prev_d]
+                        cat_rank = {"Good": 0, "At Risk": 1, "Critical": 2}
+
+                        for aid, curr in accounts.items():
+                            if aid in prev_accounts:
+                                prev = prev_accounts[aid]
+                                if curr["health_category"] != prev["health_category"]:
+                                    explanation = self._explain_health_movement(prev, curr)
+                                    lookback = sorted_dates[max(0, i - 6):i + 1]
+                                    recent = [by_date[dd][aid]["health_score"] for dd in lookback if aid in by_date[dd]]
+                                    movement = {
+                                        "account_id": aid,
+                                        "account_name": curr["account_name"],
+                                        "prev_score": prev["health_score"],
+                                        "curr_score": curr["health_score"],
+                                        "prev_category": prev["health_category"],
+                                        "curr_category": curr["health_category"],
+                                        "explanation": explanation,
+                                        "recent_scores": recent,
+                                    }
+                                    if cat_rank.get(curr["health_category"], 0) < cat_rank.get(prev["health_category"], 0):
+                                        improved.append(movement)
+                                    else:
+                                        worsened.append(movement)
+
+                    result_days.append({
+                        "date": d,
+                        "prev_date": sorted_dates[i - 1] if i > 0 else None,
+                        "good": good,
+                        "at_risk": at_risk,
+                        "critical": critical,
+                        "improved": sorted(improved, key=lambda x: x["curr_score"] - x["prev_score"], reverse=True),
+                        "worsened": sorted(worsened, key=lambda x: x["curr_score"] - x["prev_score"]),
+                    })
+
+                result_days.reverse()
+
+                today_delta = None
+                if len(result_days) >= 2:
+                    today_delta = {
+                        "good": result_days[0]["good"] - result_days[1]["good"],
+                        "at_risk": result_days[0]["at_risk"] - result_days[1]["at_risk"],
+                        "critical": result_days[0]["critical"] - result_days[1]["critical"],
+                    }
+
+                logger.info(f"Health changes: {len(result_days)} days, {sum(len(d['improved']) + len(d['worsened']) for d in result_days)} total movements")
+                return {"days": result_days, "today_delta": today_delta}
+
+            except Exception as e:
+                logger.warning(f"Failed to get health distribution changes: {e}")
+                return {"days": [], "today_delta": None}
+
     def get_weekly_summaries(self, account_id: str, limit: int = 12, offset: int = 0) -> dict:
         """Fetch pre-computed weekly summaries for an account."""
         SUMMARIES_TABLE = "silver.silver_layer.account_weekly_summaries"
@@ -1697,6 +1898,60 @@ class DatabricksService:
                 # Get usage decline count from pre-computed table
                 usage_decline = self._get_usage_decline_count_from_precomputed(conn, account_type)
 
+                # Day-over-day deltas from pre-computed health scores
+                at_risk_delta = None
+                usage_decline_delta = None
+                try:
+                    HEALTH_T = "silver.silver_layer.account_health_scores_history"
+                    type_join_d = ""
+                    type_filter_d = ""
+                    if account_type and account_type.lower() not in ("all", ""):
+                        type_join_d = f"JOIN {DIM_CUSTOMERS_TABLE} dc2 ON h2.account_id = dc2.account_id AND dc2._fivetran_deleted = false"
+                        type_filter_d = f"AND dc2.account_type = '{safe_type}'"
+
+                    delta_cursor = conn.cursor()
+                    delta_cursor.execute(f"""
+                        WITH dates AS (
+                            SELECT MAX(score_date) AS today,
+                                   (SELECT MAX(score_date) FROM {HEALTH_T} WHERE score_date < (SELECT MAX(score_date) FROM {HEALTH_T})) AS yesterday
+                            FROM {HEALTH_T}
+                        ),
+                        today_counts AS (
+                            SELECT
+                                SUM(CASE WHEN h2.health_category IN ('At Risk', 'Critical') THEN 1 ELSE 0 END) AS at_risk,
+                                SUM(CASE WHEN h2.has_pendo = true AND h2.previous_visitors > 0
+                                         AND ((h2.current_visitors - h2.previous_visitors) * 100.0 / h2.previous_visitors) <= -20
+                                    THEN 1 ELSE 0 END) AS usage_decline
+                            FROM {HEALTH_T} h2
+                            {type_join_d}
+                            CROSS JOIN dates d
+                            WHERE h2.score_date = d.today {type_filter_d}
+                        ),
+                        yesterday_counts AS (
+                            SELECT
+                                SUM(CASE WHEN h2.health_category IN ('At Risk', 'Critical') THEN 1 ELSE 0 END) AS at_risk,
+                                SUM(CASE WHEN h2.has_pendo = true AND h2.previous_visitors > 0
+                                         AND ((h2.current_visitors - h2.previous_visitors) * 100.0 / h2.previous_visitors) <= -20
+                                    THEN 1 ELSE 0 END) AS usage_decline
+                            FROM {HEALTH_T} h2
+                            {type_join_d}
+                            CROSS JOIN dates d
+                            WHERE h2.score_date = d.yesterday {type_filter_d}
+                        )
+                        SELECT
+                            COALESCE(t.at_risk, 0) - COALESCE(y.at_risk, 0),
+                            COALESCE(t.usage_decline, 0) - COALESCE(y.usage_decline, 0)
+                        FROM today_counts t, yesterday_counts y
+                    """)
+                    delta_row = delta_cursor.fetchone()
+                    delta_cursor.close()
+                    if delta_row:
+                        at_risk_delta = int(delta_row[0]) if delta_row[0] is not None else None
+                        usage_decline_delta = int(delta_row[1]) if delta_row[1] is not None else None
+                    logger.info(f"KPI deltas: at_risk={at_risk_delta}, usage_decline={usage_decline_delta}")
+                except Exception as de:
+                    logger.warning(f"Failed to calculate KPI deltas: {de}")
+
                 metrics = MetricsSummary(
                     total_accounts=total,
                     total_arr=portfolio_arr_eur,
@@ -1711,6 +1966,8 @@ class DatabricksService:
                     renewals_90_days=renewals_count,
                     usage_decline_count=usage_decline,
                     expansion_signals=0,
+                    at_risk_delta=at_risk_delta,
+                    usage_decline_delta=usage_decline_delta,
                 )
                 logger.info(f"Returning metrics: renewals_arr={renewals_arr}, renewals_count={renewals_count}")
                 return metrics

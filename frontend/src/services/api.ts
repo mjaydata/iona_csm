@@ -141,6 +141,42 @@ export async function getWeeklySummary(
   return data
 }
 
+export interface AccountMovement {
+  account_id: string
+  account_name: string
+  prev_score: number
+  curr_score: number
+  prev_category: string
+  curr_category: string
+  explanation: string
+  recent_scores: number[]
+}
+
+export interface HealthChangeDay {
+  date: string
+  prev_date: string | null
+  good: number
+  at_risk: number
+  critical: number
+  improved: AccountMovement[]
+  worsened: AccountMovement[]
+}
+
+export interface HealthChangesResponse {
+  days: HealthChangeDay[]
+  today_delta: { good: number; at_risk: number; critical: number } | null
+}
+
+export async function getHealthChanges(
+  days: number = 30,
+  accountType?: string
+): Promise<HealthChangesResponse> {
+  const params: Record<string, any> = { days }
+  if (accountType && accountType !== 'all') params.account_type = accountType
+  const { data } = await api.get<HealthChangesResponse>('/metrics/health-changes', { params })
+  return data
+}
+
 export interface GetSupportTicketsParams {
   page?: number
   page_size?: number

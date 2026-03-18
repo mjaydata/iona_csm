@@ -2,6 +2,8 @@ import { TrendingUp, TrendingDown, Minus, ExternalLink, Calendar, Info } from 'l
 import clsx from 'clsx'
 import React, { useState, useRef, useEffect } from 'react'
 import { createPortal } from 'react-dom'
+import { useQuery } from '@tanstack/react-query'
+import { getHealthChanges } from '../services/api'
 import type { MetricsSummary, CustomerGrowthSummary, MonthlyGrowthPoint } from '../types'
 
 const RENEWAL_PERIODS = [
@@ -142,16 +144,33 @@ function TrendBadge({ value, type }: { value: string; type: 'positive' | 'negati
 /**
  * Health Distribution Bar - Green/Yellow/Red
  */
+function DeltaTag({ value, invert }: { value: number; invert?: boolean }) {
+  if (value === 0) return null
+  const isGood = invert ? value < 0 : value > 0
+  return (
+    <span className={clsx(
+      'inline-flex items-center text-[9px] font-bold px-1.5 py-0.5 rounded-full ml-1 leading-none',
+      isGood
+        ? 'bg-emerald-100 text-emerald-700'
+        : 'bg-rose-100 text-rose-700'
+    )}>
+      {value > 0 ? '+' : ''}{value}
+    </span>
+  )
+}
+
 function HealthDistributionBar({ 
   good, 
   atRisk, 
   critical,
-  isLoading = false 
+  isLoading = false,
+  delta,
 }: { 
   good: number
   atRisk: number
   critical: number
   isLoading?: boolean
+  delta?: { good: number; at_risk: number; critical: number } | null
 }) {
   const total = good + atRisk + critical
   const goodPct = total > 0 ? (good / total) * 100 : 0
@@ -169,36 +188,39 @@ function HealthDistributionBar({
         <div 
           className="h-full bg-emerald-500 transition-all duration-500"
           style={{ width: `${goodPct}%` }}
-          title={`Good: ${good} (${goodPct.toFixed(0)}%)`}
+          title={`Healthy: ${good} (${goodPct.toFixed(0)}%)`}
         />
         <div 
           className="h-full bg-amber-400 transition-all duration-500"
           style={{ width: `${atRiskPct}%` }}
-          title={`At Risk: ${atRisk} (${atRiskPct.toFixed(0)}%)`}
+          title={`Needs Attention: ${atRisk} (${atRiskPct.toFixed(0)}%)`}
         />
         <div 
           className="h-full bg-rose-500 transition-all duration-500"
           style={{ width: `${criticalPct}%` }}
-          title={`Critical: ${critical} (${criticalPct.toFixed(0)}%)`}
+          title={`At Risk: ${critical} (${criticalPct.toFixed(0)}%)`}
         />
       </div>
       
-      {/* Legend */}
+      {/* Legend with deltas */}
       <div className="flex items-center gap-3 text-[10px] font-medium">
         <span className="flex items-center gap-1">
           <span className="w-2 h-2 bg-emerald-500 rounded-full" />
           <span className="text-slate-500">{good}</span>
-          <span className="text-emerald-600">Good</span>
+          <span className="text-emerald-600">Healthy</span>
+          {delta && <DeltaTag value={delta.good} />}
         </span>
         <span className="flex items-center gap-1">
           <span className="w-2 h-2 bg-amber-400 rounded-full" />
           <span className="text-slate-500">{atRisk}</span>
-          <span className="text-amber-600">At Risk</span>
+          <span className="text-amber-600">Needs Attention</span>
+          {delta && <DeltaTag value={delta.at_risk} invert />}
         </span>
         <span className="flex items-center gap-1">
           <span className="w-2 h-2 bg-rose-500 rounded-full" />
           <span className="text-slate-500">{critical}</span>
-          <span className="text-rose-600">Critical</span>
+          <span className="text-rose-600">At Risk</span>
+          {delta && <DeltaTag value={delta.critical} invert />}
         </span>
       </div>
     </div>
@@ -274,6 +296,13 @@ export function PortfolioSummary({ metrics, isLoading, onOpenARR, onOpenCustomer
   const renewalsCount = metrics?.renewals_count ?? 0
   const healthDist = metrics?.health_distribution ?? { good: 0, at_risk: 0, critical: 0 }
 
+  const { data: healthChanges } = useQuery({
+    queryKey: ['health-delta'],
+    queryFn: () => getHealthChanges(2),
+    staleTime: 10 * 60 * 1000,
+  })
+  const healthDelta = healthChanges?.today_delta ?? null
+
   // YoY trend from real data
   const yoyPct = growthSummary?.yoy_growth_pct ?? 0
   const newLast12 = growthSummary?.new_last_12m ?? 0
@@ -336,6 +365,7 @@ export function PortfolioSummary({ metrics, isLoading, onOpenARR, onOpenCustomer
           atRisk={healthDist.at_risk}
           critical={healthDist.critical}
           isLoading={isLoading}
+          delta={healthDelta}
         />
       </button>
       

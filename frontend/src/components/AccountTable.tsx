@@ -4,6 +4,7 @@ import { clsx } from 'clsx'
 import { ChevronDown, ChevronRight, Loader2, Info, X } from 'lucide-react'
 import type { Account, RenewalInfo } from '../types'
 import { getHealthScoreDetail, getHealthScoreHistory, type HealthScoreDetail, type HealthScoreHistoryPoint } from '../services/api'
+import { healthLabel, healthBadgeLabel } from '../utils/healthLabels'
 
 interface AccountTableProps {
   accounts: Account[]
@@ -245,11 +246,11 @@ function HealthBadgeWithSignal({
         title="Click to see health score details"
       >
         <span className={clsx(
-          'text-[10px] font-semibold px-2 py-0.5 rounded-full uppercase tracking-wide',
+          'text-[10px] font-semibold px-2 py-0.5 rounded-full uppercase tracking-wide whitespace-nowrap',
           score >= 70 ? 'bg-emerald-100 text-emerald-700' :
-          score >= 40 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'
+          score >= 40 ? 'bg-amber-100 text-amber-700' : 'bg-rose-100 text-rose-700'
         )}>
-          {health}
+          {healthBadgeLabel(health)}
         </span>
         <Info className="w-3.5 h-3.5 text-slate-300 group-hover:text-slate-500 transition-colors" />
       </div>
@@ -275,7 +276,7 @@ function HealthBadgeWithSignal({
                     {score}
                   </div>
                   <div>
-                    <div className="text-lg font-semibold text-slate-800">{health}</div>
+                    <div className="text-lg font-semibold text-slate-800">{healthLabel(health)}</div>
                     <div className="text-xs text-slate-500">Health Score</div>
                   </div>
                 </div>
@@ -299,9 +300,9 @@ function HealthBadgeWithSignal({
                   />
                 </div>
                 <div className="flex justify-between mt-1.5 text-[10px] text-slate-400">
-                  <span>Critical</span>
                   <span>At Risk</span>
-                  <span>Good</span>
+                  <span>Needs Attention</span>
+                  <span>Healthy</span>
                 </div>
               </div>
             </div>
@@ -667,9 +668,9 @@ function AccountRow({
           <div className="flex-shrink-0">
             <div className={clsx(
               'w-2 h-2 rounded-full',
-              account.health === 'Critical' && 'bg-red-500',
-              account.health === 'At Risk' && 'bg-amber-500',
-              account.health === 'Good' && 'bg-green-500'
+              account.health === 'Critical' && 'bg-rose-500',
+              account.health === 'At Risk' && 'bg-amber-400',
+              account.health === 'Good' && 'bg-emerald-500'
             )} />
           </div>
           <button

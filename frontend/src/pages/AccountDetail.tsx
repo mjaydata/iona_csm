@@ -12,6 +12,7 @@ import { DraggableWidgetGrid, getDefaultLayout } from '../components/DraggableWi
 import { Badge } from '../components/widgets'
 import { WeeklySummaryDrawer } from '../components/WeeklySummaryDrawer'
 import { clsx } from 'clsx'
+import { healthLabel, healthVariant } from '../utils/healthLabels'
 
 interface AccountDetailProps {
   accountId: string
@@ -156,12 +157,11 @@ export function AccountDetail({ accountId, onBack }: AccountDetailProps) {
                   <p className="text-slate-500">Health</p>
                   <Badge 
                     variant={
-                      account.health === 'Good' ? 'success' :
-                      account.health === 'At Risk' ? 'warning' : 'critical'
+                      healthVariant(account.health)
                     }
                     size="sm"
                   >
-                    {account.health}
+                    {healthLabel(account.health)}
                   </Badge>
                 </div>
               </div>

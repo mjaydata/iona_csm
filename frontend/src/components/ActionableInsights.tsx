@@ -25,6 +25,22 @@ interface InsightCardProps {
   isActive: boolean
   tooltip?: string
   dimmed?: boolean
+  delta?: number | null
+  invertDelta?: boolean
+}
+
+function DeltaIndicator({ value, invert }: { value: number; invert?: boolean }) {
+  if (value === 0) return null
+  const isGood = invert ? value < 0 : value > 0
+  const absVal = Math.abs(value)
+  return (
+    <span className={clsx(
+      'inline-flex items-center gap-0.5 text-[9px] font-bold px-1 py-0.5 rounded',
+      isGood ? 'text-emerald-600 bg-emerald-50' : 'text-rose-600 bg-rose-50'
+    )}>
+      {value > 0 ? '↑' : '↓'}{absVal}
+    </span>
+  )
 }
 
 function InsightCard({
@@ -40,6 +56,8 @@ function InsightCard({
   isActive,
   tooltip,
   dimmed,
+  delta,
+  invertDelta,
 }: InsightCardProps) {
   return (
     <button
@@ -60,6 +78,7 @@ function InsightCard({
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-1.5">
             <p className="text-xs font-bold text-slate-900 leading-tight">{title}</p>
+            {delta != null && delta !== 0 && <DeltaIndicator value={delta} invert={invertDelta} />}
             {tooltip && (
               <div className="group relative">
                 <Info className="w-3 h-3 text-slate-400 cursor-help" />
@@ -110,12 +129,14 @@ export function ActionableInsights({ metrics, isLoading, activeKpi, onKpiClick, 
           accentColor="border-l-rose-500"
           cardBg="bg-rose-50/40"
           iconColor="text-rose-500"
-          title={isLoading ? '...' : `${atRiskCount} Accounts at Risk`}
-          description="Significant health score drops detected. Review and intervene."
+          title={isLoading ? '...' : `${atRiskCount} Accounts Need Attention`}
+          description="Health scores dropped below threshold. Review and follow up."
           actionLabel="Start Recovery"
           actionColor="text-rose-600"
           onClick={() => onKpiClick(activeKpi === 'at_risk' ? 'all' : 'at_risk')}
           isActive={activeKpi === 'at_risk'}
+          delta={metrics?.at_risk_delta}
+          invertDelta
         />
 
         <InsightCard
@@ -143,6 +164,8 @@ export function ActionableInsights({ metrics, isLoading, activeKpi, onKpiClick, 
           onClick={() => onKpiClick(activeKpi === 'usage_decline' ? 'all' : 'usage_decline')}
           isActive={activeKpi === 'usage_decline'}
           tooltip="Based on Pendo visitor data. Counts accounts where active users dropped 20% or more compared to the previous 30-day period. Not all accounts have Pendo integrated."
+          delta={metrics?.usage_decline_delta}
+          invertDelta
         />
 
         <InsightCard
