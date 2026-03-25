@@ -1,8 +1,8 @@
 import { useState } from 'react'
-import { FileText, Calendar, ChevronDown, ChevronRight, AlertTriangle, Clock, DollarSign } from 'lucide-react'
+import { FileText, Calendar, ChevronDown, ChevronRight, AlertTriangle, Clock, DollarSign, ExternalLink } from 'lucide-react'
 import { BaseWidget, Badge } from './BaseWidget'
 import { clsx } from 'clsx'
-import type { ContractContext, ContractGroupDetail } from '../../types'
+import type { ContractContext, ContractGroupDetail, LuminanceDocument } from '../../types'
 
 interface ContractWidgetProps {
   data: ContractContext | undefined
@@ -132,6 +132,52 @@ function DetailRow({ label, value, valueClass }: { label: string; value: string;
   )
 }
 
+function LuminanceSection({ documents }: { documents: LuminanceDocument[] }) {
+  const [expanded, setExpanded] = useState(false)
+  const visible = expanded ? documents : documents.slice(0, 3)
+
+  return (
+    <div>
+      <div className="flex items-center gap-1.5 mb-2">
+        <FileText className="w-3 h-3 text-indigo-500" />
+        <h4 className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+          Luminance ({documents.length})
+        </h4>
+      </div>
+      <div className="space-y-1.5">
+        {visible.map((doc) => (
+          <a
+            key={doc.document_id}
+            href={doc.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 p-2.5 rounded-lg border border-indigo-100 bg-indigo-50/50 hover:bg-indigo-100/60 transition-colors group"
+          >
+            <FileText className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <span className="text-xs font-medium text-slate-700 group-hover:text-indigo-700 truncate block">
+                {doc.title}
+              </span>
+              {doc.document_type && (
+                <span className="text-[10px] text-slate-400">{doc.document_type}</span>
+              )}
+            </div>
+            <ExternalLink className="w-3 h-3 text-indigo-300 group-hover:text-indigo-500 flex-shrink-0 transition-colors" />
+          </a>
+        ))}
+      </div>
+      {documents.length > 3 && (
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="mt-2 text-[10px] font-medium text-indigo-500 hover:text-indigo-700 transition-colors"
+        >
+          {expanded ? 'Show less' : `Show all ${documents.length} documents`}
+        </button>
+      )}
+    </div>
+  )
+}
+
 export function ContractWidget({ data, isLoading, onHide, collapsed, onCollapsedChange }: ContractWidgetProps) {
   const hasContracts = data && data.contracts && data.contracts.length > 0
   const isUrgent = data && data.days_until_renewal > 0 && data.days_until_renewal <= 30
@@ -240,6 +286,11 @@ export function ContractWidget({ data, isLoading, onHide, collapsed, onCollapsed
                     ))}
                   </div>
                 </div>
+              )}
+
+              {/* Luminance Documents */}
+              {data.luminance_documents && data.luminance_documents.length > 0 && (
+                <LuminanceSection documents={data.luminance_documents} />
               )}
             </>
           ) : (

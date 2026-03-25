@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import { 
   Users, 
   UserPlus, 
@@ -17,7 +17,7 @@ import {
 import { clsx } from 'clsx'
 import { useCSMStats, useCSMs, useAccountsWithCSM } from '../hooks/useCSM'
 import { CSMProfilePanel } from '../components/CSMProfilePanel'
-import { healthLabel } from '../utils/healthLabels'
+import { healthBadgeLabel } from '../utils/healthLabels'
 import type { CSM, AccountWithCSM, CSMStatus, RenewalInfo } from '../types'
 
 // Utility to format currency
@@ -39,9 +39,9 @@ function HealthBadge({ health }: { health: string }) {
   const Icon = config.icon
 
   return (
-    <span className={clsx('inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium', config.bg, config.text)}>
+    <span className={clsx('inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap', config.bg, config.text)}>
       {Icon && <Icon className="w-3 h-3" />}
-      {healthLabel(health)}
+      {healthBadgeLabel(health)}
     </span>
   )
 }
@@ -61,6 +61,82 @@ function CSMStatusBadge({ status }: { status: CSMStatus }) {
       <Icon className="w-3 h-3" />
       {config.label}
     </span>
+  )
+}
+
+// CSM employment type
+type CSMType = 'full-time' | 'part-time' | 'backfill'
+const CSM_TYPE_OPTIONS: { value: CSMType; label: string; short: string; bg: string; text: string }[] = [
+  { value: 'full-time', label: 'Full-Time', short: 'FT', bg: 'bg-emerald-100', text: 'text-emerald-700' },
+  { value: 'part-time', label: 'Part-Time', short: 'PT', bg: 'bg-blue-100', text: 'text-blue-700' },
+  { value: 'backfill', label: 'Backfill', short: 'BF', bg: 'bg-amber-100', text: 'text-amber-700' },
+]
+
+function CSMTypeBadge({
+  csmId,
+  currentType,
+  onTypeChange,
+}: {
+  csmId: string
+  currentType: CSMType
+  onTypeChange: (csmId: string, type: CSMType) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [openUp, setOpenUp] = useState(false)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const current = CSM_TYPE_OPTIONS.find(o => o.value === currentType) ?? CSM_TYPE_OPTIONS[0]
+
+  const handleOpen = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!open && btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect()
+      const spaceBelow = window.innerHeight - rect.bottom
+      setOpenUp(spaceBelow < 120)
+    }
+    setOpen(!open)
+  }
+
+  return (
+    <div className="relative">
+      <button
+        ref={btnRef}
+        onClick={handleOpen}
+        className={clsx(
+          'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold transition-colors',
+          current.bg, current.text
+        )}
+        title="Change CSM type"
+      >
+        {current.short}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-20" onClick={(e) => { e.stopPropagation(); setOpen(false) }} />
+          <div className={clsx(
+            'absolute left-0 z-30 bg-white border border-slate-200 rounded-lg shadow-lg w-[130px] py-1 overflow-hidden',
+            openUp ? 'bottom-full mb-1' : 'top-full mt-1'
+          )}>
+            {CSM_TYPE_OPTIONS.map(opt => (
+              <button
+                key={opt.value}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onTypeChange(csmId, opt.value)
+                  setOpen(false)
+                }}
+                className={clsx(
+                  'w-full text-left px-3 py-1.5 text-xs hover:bg-slate-50 transition-colors flex items-center gap-2',
+                  currentType === opt.value ? 'font-bold text-primary-600 bg-primary-50/50' : 'text-slate-600'
+                )}
+              >
+                <span className={clsx('w-2 h-2 rounded-full', opt.bg.replace('100', '500'))} />
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
   )
 }
 
@@ -139,57 +215,142 @@ function RenewalCell({ renewals, fallbackDays }: { renewals?: RenewalInfo[]; fal
   )
 }
 
-// Clickable Stat Card component
-function StatCard({ 
-  icon: Icon, 
-  iconBg, 
-  iconColor, 
-  value, 
-  label, 
+// FTE capacity weight per CSM type
+const FTE_WEIGHT: Record<CSMType, number> = {
+  'full-time': 1.0,
+  'part-time': 0.5,
+  'backfill': 0.5,
+}
+
+// Rich stat card matching homepage Companies card style
+function ActiveCSMsCard({
+  total,
+  typeCounts,
+  isLoading,
+}: {
+  total: number
+  typeCounts: { ft: number; pt: number; bf: number }
+  isLoading?: boolean
+}) {
+  const segments = [
+    { count: typeCounts.ft, color: 'bg-emerald-500', label: 'Full-Time', dot: 'bg-emerald-500' },
+    { count: typeCounts.pt, color: 'bg-blue-500', label: 'Part-Time', dot: 'bg-blue-500' },
+    { count: typeCounts.bf, color: 'bg-amber-500', label: 'Backfill', dot: 'bg-amber-500' },
+  ].filter(s => s.count > 0)
+
+  return (
+    <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Active CSMs</p>
+        <div className={clsx('w-9 h-9 rounded-xl flex items-center justify-center bg-primary-100')}>
+          <Users className="w-4 h-4 text-primary-600" />
+        </div>
+      </div>
+      {isLoading ? (
+        <div className="h-8 w-16 bg-slate-200 rounded animate-pulse mb-3" />
+      ) : (
+        <p className="text-3xl font-bold text-slate-800 mb-3">{total}</p>
+      )}
+      {!isLoading && total > 0 && (
+        <>
+          <div className="flex h-2 rounded-full overflow-hidden bg-slate-100 mb-2">
+            {segments.map(s => (
+              <div
+                key={s.label}
+                className={clsx('h-full transition-all', s.color)}
+                style={{ width: `${(s.count / total) * 100}%` }}
+              />
+            ))}
+          </div>
+          <div className="flex items-center gap-3 flex-wrap">
+            {segments.map(s => (
+              <span key={s.label} className="flex items-center gap-1 text-[11px] text-slate-600">
+                <span className={clsx('w-2 h-2 rounded-full', s.dot)} />
+                {s.count} {s.label}
+              </span>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function AvgAccountsCard({
+  ftAvg,
+  ptAvg,
+  fteAvg,
+  isLoading,
+}: {
+  ftAvg: number
+  ptAvg: number
+  fteAvg: number
+  isLoading?: boolean
+}) {
+  return (
+    <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Avg Accounts / CSM</p>
+        <div className="w-9 h-9 rounded-xl flex items-center justify-center bg-emerald-100">
+          <BarChart3 className="w-4 h-4 text-emerald-600" />
+        </div>
+      </div>
+      {isLoading ? (
+        <div className="h-8 w-16 bg-slate-200 rounded animate-pulse mb-3" />
+      ) : (
+        <p className="text-3xl font-bold text-slate-800 mb-3">{fteAvg.toFixed(1)} <span className="text-sm font-normal text-slate-400">per FTE</span></p>
+      )}
+      {!isLoading && (
+        <div className="flex items-center gap-4">
+          <span className="flex items-center gap-1 text-[11px] text-slate-600">
+            <span className="w-2 h-2 rounded-full bg-emerald-500" />
+            {ftAvg.toFixed(1)} FT avg
+          </span>
+          {ptAvg > 0 && (
+            <span className="flex items-center gap-1 text-[11px] text-slate-600">
+              <span className="w-2 h-2 rounded-full bg-blue-500" />
+              {ptAvg.toFixed(1)} PT avg
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function UnassignedCard({
+  value,
   isLoading,
   isActive,
   onClick,
-  clickable = false,
-}: { 
-  icon: typeof Users
-  iconBg: string
-  iconColor: string
-  value: string | number
-  label: string
+}: {
+  value: number | string
   isLoading?: boolean
   isActive?: boolean
   onClick?: () => void
-  clickable?: boolean
 }) {
   return (
-    <div 
+    <div
       className={clsx(
-        'bg-white rounded-xl shadow-sm border p-5 transition-all',
-        clickable && 'cursor-pointer hover:shadow-md',
-        isActive 
-          ? 'border-primary-500 ring-2 ring-primary-100 bg-primary-50/30' 
+        'bg-white rounded-xl shadow-sm border p-5 transition-all cursor-pointer hover:shadow-md',
+        isActive
+          ? 'border-amber-400 ring-2 ring-amber-100 bg-amber-50/30'
           : 'border-gray-200 hover:border-gray-300'
       )}
-      onClick={clickable ? onClick : undefined}
+      onClick={onClick}
     >
-      <div className="flex items-center gap-4">
-        <div className={clsx('w-11 h-11 rounded-xl flex items-center justify-center', iconBg)}>
-          <Icon className={clsx('w-5 h-5', iconColor)} />
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Unassigned Accounts</p>
+        <div className="w-9 h-9 rounded-xl flex items-center justify-center bg-amber-100">
+          <UserPlus className="w-4 h-4 text-amber-600" />
         </div>
-        <div className="flex-1">
-          {isLoading ? (
-            <div className="h-7 w-16 bg-slate-200 rounded animate-pulse" />
-          ) : (
-            <p className="text-2xl font-bold text-slate-800">{value}</p>
-          )}
-          <p className="text-sm text-slate-500">{label}</p>
-        </div>
-        {isActive && (
-          <div className="flex items-center">
-            <CheckCircle className="w-5 h-5 text-primary-500" />
-          </div>
-        )}
       </div>
+      {isLoading ? (
+        <div className="h-8 w-16 bg-slate-200 rounded animate-pulse" />
+      ) : (
+        <p className="text-3xl font-bold text-slate-800">{value}</p>
+      )}
+      <p className="text-[11px] text-slate-400 mt-1">Click to view</p>
     </div>
   )
 }
@@ -200,13 +361,17 @@ function CSMRow({
   isExpanded, 
   onToggle,
   onViewProfile,
-  avgAccounts,
+  expectedAccounts,
+  csmType,
+  onTypeChange,
 }: { 
   csm: CSM
   isExpanded: boolean
   onToggle: () => void
   onViewProfile: () => void
-  avgAccounts: number
+  expectedAccounts: number
+  csmType: CSMType
+  onTypeChange: (csmId: string, type: CSMType) => void
 }) {
   // Fetch accounts for this CSM when expanded
   const { data: accountsData, isLoading: accountsLoading } = useAccountsWithCSM({
@@ -214,7 +379,7 @@ function CSMRow({
     page_size: 100,
   })
 
-  const workloadPercent = avgAccounts > 0 ? (csm.account_count / avgAccounts) * 100 : 100
+  const workloadPercent = expectedAccounts > 0 ? (csm.account_count / expectedAccounts) * 100 : 100
   const workloadLevel = workloadPercent > 120 ? 'high' : workloadPercent < 80 ? 'low' : 'normal'
 
   const isInactive = csm.status === 'inactive'
@@ -276,6 +441,9 @@ function CSMRow({
               <p className="text-xs text-slate-500">{csm.email}</p>
             </div>
           </div>
+        </td>
+        <td className="py-3 px-4 text-center">
+          <CSMTypeBadge csmId={csm.id} currentType={csmType} onTypeChange={onTypeChange} />
         </td>
         <td className="py-3 px-4 text-center">
           <span className={clsx(
@@ -341,7 +509,7 @@ function CSMRow({
       {/* Expanded Accounts */}
       {isExpanded && (
         <tr>
-          <td colSpan={7} className="p-0">
+          <td colSpan={8} className="p-0">
             <div className={clsx(
               'border-t',
               isDeparted ? 'bg-rose-50/30' : 'bg-gradient-to-b from-slate-50/80 to-white'
@@ -505,7 +673,27 @@ export function ManageCSM() {
   const [expandedCSMs, setExpandedCSMs] = useState<Set<string>>(new Set())
   const [showUnassignedOnly, setShowUnassignedOnly] = useState(false)
   const [csmStatusFilter, setCsmStatusFilter] = useState<string>('')
+  const [csmTypeFilter, setCsmTypeFilter] = useState<string>('')
   const [selectedCSM, setSelectedCSM] = useState<CSM | null>(null)
+
+  // CSM type tagging (shared JSON file via /api/csm/types)
+  const [csmTypes, setCsmTypes] = useState<Record<string, CSMType>>({})
+
+  useEffect(() => {
+    fetch('/api/csm/types')
+      .then(r => r.json())
+      .then(data => { if (data && typeof data === 'object') setCsmTypes(data) })
+      .catch(() => {})
+  }, [])
+
+  const handleTypeChange = useCallback((csmId: string, type: CSMType) => {
+    setCsmTypes(prev => ({ ...prev, [csmId]: type }))
+    fetch('/api/csm/types', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ csm_id: csmId, csm_type: type }),
+    }).catch(() => {})
+  }, [])
 
   // CSM filter dropdown (like homepage)
   const [csmFilter, setCsmFilter] = useState<string | null>(null)
@@ -534,20 +722,56 @@ export function ManageCSM() {
     return allCSMNames.filter(name => name.toLowerCase().includes(q))
   }, [allCSMNames, csmSearch])
 
-  // Filter CSMs by selected CSM name
+  // Filter CSMs by selected CSM name and type
   const filteredCSMs = useMemo(() => {
     if (!csmsData?.csms) return []
-    if (!csmFilter) return csmsData.csms
-    return csmsData.csms.filter(csm => csm.name === csmFilter)
-  }, [csmsData, csmFilter])
+    let result = csmsData.csms
+    if (csmFilter) result = result.filter(csm => csm.name === csmFilter)
+    if (csmTypeFilter) {
+      result = result.filter(csm => (csmTypes[csm.id] ?? 'full-time') === csmTypeFilter)
+    }
+    return result
+  }, [csmsData, csmFilter, csmTypeFilter, csmTypes])
 
-  // Calculate average accounts for workload (only from active CSMs)
-  const avgAccounts = useMemo(() => {
-    if (!csmsData?.csms || csmsData.csms.length === 0) return 0
-    const activeCSMs = csmsData.csms.filter(c => c.status === 'active')
-    if (activeCSMs.length === 0) return 0
-    return activeCSMs.reduce((sum, c) => sum + c.account_count, 0) / activeCSMs.length
-  }, [csmsData])
+  // CSM type breakdown counts
+  const typeCounts = useMemo(() => {
+    if (!csmsData?.csms) return { ft: 0, pt: 0, bf: 0 }
+    const active = csmsData.csms.filter(c => c.status === 'active')
+    let ft = 0, pt = 0, bf = 0
+    for (const c of active) {
+      const t = csmTypes[c.id] ?? 'full-time'
+      if (t === 'full-time') ft++
+      else if (t === 'part-time') pt++
+      else bf++
+    }
+    return { ft, pt, bf }
+  }, [csmsData, csmTypes])
+
+  // FTE-weighted workload: fair share per FTE unit
+  const fairSharePerFTE = useMemo(() => {
+    if (!csmsData?.csms) return 0
+    const active = csmsData.csms.filter(c => c.status === 'active')
+    if (active.length === 0) return 0
+    const totalAccounts = active.reduce((sum, c) => sum + c.account_count, 0)
+    const totalFTE = active.reduce((sum, c) => sum + FTE_WEIGHT[csmTypes[c.id] ?? 'full-time'], 0)
+    return totalFTE > 0 ? totalAccounts / totalFTE : 0
+  }, [csmsData, csmTypes])
+
+  // Average accounts by type (for stat card)
+  const avgByType = useMemo(() => {
+    if (!csmsData?.csms) return { ft: 0, pt: 0 }
+    const active = csmsData.csms.filter(c => c.status === 'active')
+    let ftSum = 0, ftCount = 0, ptSum = 0, ptCount = 0
+    for (const c of active) {
+      const t = csmTypes[c.id] ?? 'full-time'
+      if (t === 'full-time') { ftSum += c.account_count; ftCount++ }
+      else { ptSum += c.account_count; ptCount++ }
+    }
+    return {
+      ft: ftCount > 0 ? ftSum / ftCount : 0,
+      pt: ptCount > 0 ? ptSum / ptCount : 0,
+    }
+  }, [csmsData, csmTypes])
 
   // Toggle CSM expansion
   const toggleCSM = (csmId: string) => {
@@ -573,9 +797,10 @@ export function ManageCSM() {
     setCsmSearch('')
     setShowUnassignedOnly(false)
     setCsmStatusFilter('')
+    setCsmTypeFilter('')
   }
 
-  const hasActiveFilters = csmFilter || showUnassignedOnly || csmStatusFilter
+  const hasActiveFilters = csmFilter || showUnassignedOnly || csmStatusFilter || csmTypeFilter
 
   return (
     <div className="p-6 bg-slate-50 min-h-full">
@@ -587,30 +812,20 @@ export function ManageCSM() {
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-        <StatCard
-          icon={Users}
-          iconBg="bg-primary-100"
-          iconColor="text-primary-600"
-          value={stats?.active_csms ?? '-'}
-          label="Active CSMs"
-          isLoading={statsLoading}
+        <ActiveCSMsCard
+          total={stats?.active_csms ?? 0}
+          typeCounts={typeCounts}
+          isLoading={statsLoading || csmsLoading}
         />
-        <StatCard
-          icon={BarChart3}
-          iconBg="bg-emerald-100"
-          iconColor="text-emerald-600"
-          value={stats?.avg_accounts_per_csm?.toFixed(1) ?? '-'}
-          label="Avg Accounts/CSM"
-          isLoading={statsLoading}
+        <AvgAccountsCard
+          ftAvg={avgByType.ft}
+          ptAvg={avgByType.pt}
+          fteAvg={fairSharePerFTE}
+          isLoading={statsLoading || csmsLoading}
         />
-        <StatCard
-          icon={UserPlus}
-          iconBg="bg-amber-100"
-          iconColor="text-amber-600"
+        <UnassignedCard
           value={stats?.unassigned_accounts ?? '-'}
-          label="Unassigned Accounts"
           isLoading={statsLoading}
-          clickable
           isActive={showUnassignedOnly}
           onClick={handleUnassignedClick}
         />
@@ -715,6 +930,20 @@ export function ManageCSM() {
               </select>
             )}
 
+            {/* CSM Type Filter */}
+            {!showUnassignedOnly && (
+              <select
+                value={csmTypeFilter}
+                onChange={(e) => setCsmTypeFilter(e.target.value)}
+                className="px-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent bg-white"
+              >
+                <option value="">All Types</option>
+                <option value="full-time">Full-Time</option>
+                <option value="part-time">Part-Time</option>
+                <option value="backfill">Backfill</option>
+              </select>
+            )}
+
             {/* Unassigned Toggle */}
             <label className="flex items-center gap-2 cursor-pointer px-3 py-1.5 rounded-lg hover:bg-slate-50 transition-colors">
               <input
@@ -771,6 +1000,7 @@ export function ManageCSM() {
                     <tr className="border-b border-slate-200">
                       <th className="w-12 py-3 px-4"></th>
                       <th className="text-left py-3 px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">CSM</th>
+                      <th className="text-center py-3 px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Type</th>
                       <th className="text-center py-3 px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Accounts</th>
                       <th className="text-right py-3 px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Total ARR</th>
                       <th className="text-center py-3 px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Needs Attention</th>
@@ -778,16 +1008,22 @@ export function ManageCSM() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {filteredCSMs.map((csm) => (
-                      <CSMRow
-                        key={csm.id}
-                        csm={csm}
-                        isExpanded={expandedCSMs.has(csm.id)}
-                        onToggle={() => toggleCSM(csm.id)}
-                        onViewProfile={() => setSelectedCSM(csm)}
-                        avgAccounts={avgAccounts}
-                      />
-                    ))}
+                    {filteredCSMs.map((csm) => {
+                      const type = csmTypes[csm.id] ?? 'full-time' as CSMType
+                      const expected = fairSharePerFTE * FTE_WEIGHT[type]
+                      return (
+                        <CSMRow
+                          key={csm.id}
+                          csm={csm}
+                          isExpanded={expandedCSMs.has(csm.id)}
+                          onToggle={() => toggleCSM(csm.id)}
+                          onViewProfile={() => setSelectedCSM(csm)}
+                          expectedAccounts={expected}
+                          csmType={type}
+                          onTypeChange={handleTypeChange}
+                        />
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>

@@ -457,6 +457,14 @@ export interface ContractGroupDetail {
   renewal_not_yet_contracted: boolean
 }
 
+export interface LuminanceDocument {
+  document_id: string
+  title: string
+  url: string
+  state: string
+  document_type: string | null
+}
+
 // Contract Context
 export interface ContractContext {
   // Summary
@@ -467,6 +475,7 @@ export interface ContractContext {
   contract_count: number
   revenue_types: string[]
   contracts: ContractGroupDetail[]
+  luminance_documents: LuminanceDocument[]
   // Legacy
   contract_type: string
   start_date: string

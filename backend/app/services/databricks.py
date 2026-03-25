@@ -24,6 +24,7 @@ from ..models.schemas import (
     ContractContext,
     ContractEvent,
     ContractGroup,
+    LuminanceDocument,
     ContributingFactor,
     CSM,
     CSMListResponse,
@@ -3393,6 +3394,8 @@ class DatabricksService:
 
                 days_until = (nearest_end - today).days if nearest_end else 0
 
+                luminance_docs = self._fetch_luminance_documents(account_detail.name)
+
                 return ContractContext(
                     total_arr_cad=total_arr_cad,
                     total_tcv_cad=total_tcv_cad,
@@ -3401,6 +3404,7 @@ class DatabricksService:
                     contract_count=len(contract_groups),
                     revenue_types=sorted(rev_types_set),
                     contracts=contract_groups,
+                    luminance_documents=luminance_docs,
                     # Legacy fields
                     contract_type=", ".join(sorted(rev_types_set)),
                     start_date=account_detail.contract_start if hasattr(account_detail, 'contract_start') else None,
@@ -3429,6 +3433,47 @@ class DatabricksService:
             payment_terms="N/A", auto_renewal=False,
             contract_history=[], contracts=[],
         )
+
+    def _fetch_luminance_documents(self, account_name: str) -> list[LuminanceDocument]:
+        """Fetch Luminance contract documents linked to this account."""
+        LUMINANCE_TABLE = "silver.silver_layer.dim_luminance_account"
+        DIM_CUSTOMERS = "silver.silver_layer.dim_customers"
+        try:
+            with self.get_connection() as conn:
+                if conn is None:
+                    return []
+                safe_name = self._sql_escape(account_name)
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    SELECT
+                        dla.id,
+                        dla.title,
+                        dla.url,
+                        dla.state,
+                        dla.document_type
+                    FROM {LUMINANCE_TABLE} dla
+                    INNER JOIN {DIM_CUSTOMERS} dc
+                        ON dc.account = dla.matched_account_name
+                    WHERE dc.account = '{safe_name}'
+                      AND dla.url IS NOT NULL
+                      AND dla.state = 'import_complete'
+                    ORDER BY dla.title
+                """)
+                rows = cursor.fetchall()
+                cursor.close()
+                return [
+                    LuminanceDocument(
+                        document_id=str(row[0] or ""),
+                        title=str(row[1] or "Untitled"),
+                        url=str(row[2]),
+                        state=str(row[3] or "import_complete"),
+                        document_type=str(row[4]) if row[4] else None,
+                    )
+                    for row in rows
+                ]
+        except Exception as e:
+            logger.error(f"_fetch_luminance_documents error: {e}")
+            return []
 
     def _fetch_pendo_usage(self, account_name: str) -> UsageAnalysis:
         """Fetch Pendo product usage data for an account from all 4 tables."""

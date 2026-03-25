@@ -456,6 +456,15 @@ class ContractGroup(BaseModel):
     renewal_not_yet_contracted: bool = False
 
 
+class LuminanceDocument(BaseModel):
+    """A contract document stored in Luminance."""
+    document_id: str
+    title: str
+    url: str
+    state: str = "import_complete"
+    document_type: Optional[str] = None
+
+
 class ContractContext(BaseModel):
     """Contract and renewal context — supports multiple contract groups."""
     # Summary across all contracts
@@ -467,6 +476,8 @@ class ContractContext(BaseModel):
     revenue_types: List[str] = []
     # Individual contract groups
     contracts: List[ContractGroup] = []
+    # Luminance contract documents
+    luminance_documents: List[LuminanceDocument] = []
     # Legacy fields for backward compat
     contract_type: str = "N/A"
     start_date: Optional[date] = None
