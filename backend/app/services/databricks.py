@@ -4954,6 +4954,69 @@ class DatabricksService:
                 return False
 
 
+    # ==================== CSM Type Tags ====================
+
+    CSM_TYPE_TAGS_TABLE = "silver.silver_layer.csm_type_tags"
+
+    def get_csm_types(self) -> dict[str, str]:
+        """Return all CSM type tags as {csm_id: csm_type}.
+
+        Also auto-inserts any active CSMs that don't have a row yet
+        (defaulting to 'full-time') so the table stays in sync.
+        """
+        try:
+            with self.get_connection() as conn:
+                if conn is None:
+                    return {}
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    MERGE INTO {self.CSM_TYPE_TAGS_TABLE} AS target
+                    USING (
+                        SELECT DISTINCT id AS csm_id
+                        FROM silver.silver_layer.dim_customers_csm
+                        WHERE status = 'active' AND id IS NOT NULL
+                    ) AS source
+                    ON target.csm_id = source.csm_id
+                    WHEN NOT MATCHED THEN
+                        INSERT (csm_id, csm_type, updated_at)
+                        VALUES (source.csm_id, 'full-time', current_timestamp())
+                """)
+                cursor.execute(f"""
+                    SELECT csm_id, csm_type
+                    FROM {self.CSM_TYPE_TAGS_TABLE}
+                """)
+                rows = cursor.fetchall()
+                cursor.close()
+                return {str(row[0]): str(row[1]) for row in rows}
+        except Exception as e:
+            logger.error(f"get_csm_types error: {e}", exc_info=True)
+            return {}
+
+    def update_csm_type(self, csm_id: str, csm_type: str) -> bool:
+        """Upsert a single CSM's type tag."""
+        try:
+            with self.get_connection() as conn:
+                if conn is None:
+                    return False
+                safe_id = self._sql_escape(csm_id)
+                safe_type = self._sql_escape(csm_type)
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    MERGE INTO {self.CSM_TYPE_TAGS_TABLE} AS target
+                    USING (SELECT '{safe_id}' AS csm_id, '{safe_type}' AS csm_type) AS source
+                    ON target.csm_id = source.csm_id
+                    WHEN MATCHED THEN
+                        UPDATE SET csm_type = source.csm_type, updated_at = current_timestamp()
+                    WHEN NOT MATCHED THEN
+                        INSERT (csm_id, csm_type, updated_at)
+                        VALUES (source.csm_id, source.csm_type, current_timestamp())
+                """)
+                cursor.close()
+                return True
+        except Exception as e:
+            logger.error(f"update_csm_type error: {e}", exc_info=True)
+            return False
+
     # ==================== CSM Management Methods ====================
 
     def get_csm_stats(self) -> CSMStats:

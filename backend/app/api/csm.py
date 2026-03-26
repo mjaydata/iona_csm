@@ -1,12 +1,9 @@
 """CSM management endpoints."""
 
-import json
 import logging
-import os
-from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from ..models.schemas import (
@@ -19,31 +16,6 @@ from ..services.databricks import DatabricksService, get_databricks_service
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# --- Shared CSM type tagging (JSON file) ---
-
-_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
-_CSM_TYPES_FILE = _DATA_DIR / "csm_types.json"
-
-
-def _read_csm_types() -> dict:
-    try:
-        if _CSM_TYPES_FILE.exists():
-            return json.loads(_CSM_TYPES_FILE.read_text(encoding="utf-8"))
-    except Exception as e:
-        logger.error(f"Error reading csm_types.json: {e}")
-    return {}
-
-
-def _write_csm_types(data: dict) -> None:
-    try:
-        _DATA_DIR.mkdir(parents=True, exist_ok=True)
-        _CSM_TYPES_FILE.write_text(
-            json.dumps(data, indent=2), encoding="utf-8"
-        )
-    except Exception as e:
-        logger.error(f"Error writing csm_types.json: {e}")
-        raise
-
 
 class CSMTypeUpdate(BaseModel):
     csm_id: str
@@ -51,20 +23,24 @@ class CSMTypeUpdate(BaseModel):
 
 
 @router.get("/types")
-async def get_csm_types():
+async def get_csm_types(
+    db: DatabricksService = Depends(get_databricks_service),
+):
     """Get shared CSM type tags (visible to all users)."""
-    return _read_csm_types()
+    return db.get_csm_types()
 
 
 @router.put("/types")
-async def update_csm_type(body: CSMTypeUpdate):
+async def update_csm_type(
+    body: CSMTypeUpdate,
+    db: DatabricksService = Depends(get_databricks_service),
+):
     """Update a CSM's type tag (shared across all users)."""
     if body.csm_type not in ("full-time", "part-time", "backfill"):
-        from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="Invalid type. Must be full-time, part-time, or backfill")
-    data = _read_csm_types()
-    data[body.csm_id] = body.csm_type
-    _write_csm_types(data)
+    ok = db.update_csm_type(body.csm_id, body.csm_type)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to update CSM type")
     return {"success": True}
 
 
