@@ -44,21 +44,140 @@ async def update_csm_type(
     return {"success": True}
 
 
+@router.get("/profile/{csm_id}")
+async def get_csm_profile(
+    csm_id: str,
+    db: DatabricksService = Depends(get_databricks_service),
+):
+    """Get detailed CSM profile from Salesforce."""
+    profile = db.get_csm_profile(csm_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="CSM not found")
+    return profile
+
+
+@router.get("/assignment-history/distinct-csm-names")
+async def get_distinct_csm_names_from_history(
+    db: DatabricksService = Depends(get_databricks_service),
+):
+    """Distinct CSM names appearing in csm_assignment_history (csm_name and handed_off_from)."""
+    return db.get_distinct_csm_names_from_assignment_history()
+
+
+@router.get("/assignment-history/{csm_id}")
+async def get_csm_assignment_history(
+    csm_id: str,
+    db: DatabricksService = Depends(get_databricks_service),
+):
+    """Get assignment history for a CSM."""
+    return db.get_csm_assignment_history(csm_id)
+
+
+class CSMAssignmentHistoryUpdateBody(BaseModel):
+    csm_id: str
+    account_name: str
+    assigned_from_key: str
+    handed_off_from: Optional[str] = None
+    handed_off_from_id: Optional[str] = None
+    assigned_from: str
+    assigned_until: Optional[str] = None
+    status: str
+
+
+class CSMAssignmentHistoryDeleteBody(BaseModel):
+    csm_id: str
+    account_name: str
+    assigned_from: str
+
+
+class CSMAssignmentHistoryCreateBody(BaseModel):
+    csm_id: str
+    csm_name: str
+    account_name: str
+    assigned_from: str
+    assigned_until: Optional[str] = None
+    handed_off_from: Optional[str] = None
+    handed_off_from_id: Optional[str] = None
+    status: str
+
+
+@router.post("/assignment-history/create")
+async def create_csm_assignment_history(
+    body: CSMAssignmentHistoryCreateBody,
+    db: DatabricksService = Depends(get_databricks_service),
+):
+    """Insert a new row into csm_assignment_history."""
+    if body.status not in ("Current", "Handed Off"):
+        raise HTTPException(status_code=400, detail="status must be Current or Handed Off")
+    ok = db.insert_csm_assignment_history_record(
+        csm_id=body.csm_id,
+        csm_name=body.csm_name,
+        account_name=body.account_name,
+        assigned_from=body.assigned_from,
+        assigned_until=body.assigned_until,
+        handed_off_from=body.handed_off_from,
+        handed_off_from_id=body.handed_off_from_id,
+        status=body.status,
+    )
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to create assignment history row")
+    return {"success": True}
+
+
+@router.put("/assignment-history")
+async def update_csm_assignment_history(
+    body: CSMAssignmentHistoryUpdateBody,
+    db: DatabricksService = Depends(get_databricks_service),
+):
+    """Update one row in csm_assignment_history (correct handoff, dates, status)."""
+    ok = db.update_csm_assignment_history_record(
+        csm_id=body.csm_id,
+        account_name=body.account_name,
+        assigned_from_key=body.assigned_from_key,
+        handed_off_from=body.handed_off_from,
+        handed_off_from_id=body.handed_off_from_id,
+        assigned_from_new=body.assigned_from,
+        assigned_until=body.assigned_until,
+        status=body.status,
+    )
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to update assignment history")
+    return {"success": True}
+
+
+@router.post("/assignment-history/delete")
+async def delete_csm_assignment_history(
+    body: CSMAssignmentHistoryDeleteBody,
+    db: DatabricksService = Depends(get_databricks_service),
+):
+    """Delete one row from csm_assignment_history."""
+    ok = db.delete_csm_assignment_history_record(
+        csm_id=body.csm_id,
+        account_name=body.account_name,
+        assigned_from=body.assigned_from,
+    )
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to delete assignment history")
+    return {"success": True}
+
+
 @router.get("/stats", response_model=CSMStats)
 async def get_csm_stats(
+    account_type: Optional[str] = Query(None, description="Filter by account type (Customer, Prospect, etc.)"),
     db: DatabricksService = Depends(get_databricks_service),
 ) -> CSMStats:
     """Get CSM management dashboard statistics."""
-    return db.get_csm_stats()
+    return db.get_csm_stats(account_type=account_type)
 
 
 @router.get("/list", response_model=CSMListResponse)
 async def list_csms(
     status: Optional[str] = Query(None, description="Filter by CSM status: active, inactive, departed"),
+    account_type: Optional[str] = Query(None, description="Filter by account type (Customer, Prospect, etc.)"),
     db: DatabricksService = Depends(get_databricks_service),
 ) -> CSMListResponse:
     """Get list of all CSMs with their metrics."""
-    return db.get_csms(status=status)
+    return db.get_csms(status=status, account_type=account_type)
 
 
 @router.get("/accounts", response_model=AccountWithCSMListResponse)
@@ -68,6 +187,7 @@ async def list_accounts_with_csm(
     csm_id: Optional[str] = Query(None, description="Filter by CSM ID"),
     unassigned_only: bool = Query(False, description="Show only unassigned accounts"),
     search: Optional[str] = Query(None, description="Search by account name"),
+    account_type: Optional[str] = Query(None, description="Filter by account type"),
     db: DatabricksService = Depends(get_databricks_service),
 ) -> AccountWithCSMListResponse:
     """Get paginated list of accounts with their CSM assignment info."""
@@ -77,6 +197,7 @@ async def list_accounts_with_csm(
         csm_id=csm_id,
         unassigned_only=unassigned_only,
         search=search,
+        account_type=account_type,
     )
 
     total_pages = (total + page_size - 1) // page_size

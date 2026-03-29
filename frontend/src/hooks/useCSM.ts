@@ -1,10 +1,10 @@
 import { useQuery, useInfiniteQuery } from '@tanstack/react-query'
-import { getCSMStats, getCSMs, getAccountsWithCSM, type GetAccountsWithCSMParams, type GetCSMsParams } from '../services/api'
+import { getCSMStats, getCSMs, getAccountsWithCSM, getCSMProfile, getCSMAssignmentHistory, type GetAccountsWithCSMParams, type GetCSMsParams, type GetCSMStatsParams } from '../services/api'
 
-export function useCSMStats() {
+export function useCSMStats(params: GetCSMStatsParams = {}) {
   return useQuery({
-    queryKey: ['csm-stats'],
-    queryFn: getCSMStats,
+    queryKey: ['csm-stats', params],
+    queryFn: () => getCSMStats(params),
   })
 }
 
@@ -19,6 +19,22 @@ export function useAccountsWithCSM(params: GetAccountsWithCSMParams = {}) {
   return useQuery({
     queryKey: ['accounts-with-csm', params],
     queryFn: () => getAccountsWithCSM(params),
+  })
+}
+
+export function useCSMProfile(csmId: string | null) {
+  return useQuery({
+    queryKey: ['csm-profile', csmId],
+    queryFn: () => getCSMProfile(csmId!),
+    enabled: !!csmId,
+  })
+}
+
+export function useCSMAssignmentHistory(csmId: string | null) {
+  return useQuery({
+    queryKey: ['csm-assignment-history', csmId],
+    queryFn: () => getCSMAssignmentHistory(csmId!),
+    enabled: !!csmId,
   })
 }
 

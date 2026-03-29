@@ -1,4 +1,6 @@
-import { useMemo } from 'react'
+import { useState, useMemo, useCallback, useRef } from 'react'
+import { createPortal } from 'react-dom'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { 
   X, 
   Mail, 
@@ -8,41 +10,59 @@ import {
   Clock,
   Users,
   DollarSign,
-  TrendingUp,
-  TrendingDown,
   AlertTriangle,
-  CheckCircle,
-  XCircle,
-  ArrowRight,
-  ArrowLeft,
-  RefreshCw,
-  Award,
-  Target,
-  MessageSquare,
-  Star,
   Briefcase,
   Building,
+  Loader2,
+  ArrowRightLeft,
+  History,
+  User,
+  Pencil,
+  Trash2,
+  Plus,
 } from 'lucide-react'
 import { clsx } from 'clsx'
-import type { CSM, CSMProfile, CSMAssignmentHistoryItem } from '../types'
+import type { CSM } from '../types'
+import type { CSMAssignmentRecord } from '../services/api'
+import {
+  updateCSMAssignmentHistory,
+  deleteCSMAssignmentHistory,
+  createCSMAssignmentHistory,
+  getDistinctCsmNamesFromHistory,
+  getCSMs,
+} from '../services/api'
+import { useCSMProfile, useCSMAssignmentHistory } from '../hooks/useCSM'
 
-// Utility to format currency
+function toDatetimeLocalValue(iso: string | null | undefined): string {
+  if (!iso || iso === '-') return ''
+  try {
+    const d = new Date(iso)
+    if (isNaN(d.getTime())) return ''
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  } catch {
+    return ''
+  }
+}
+
+function fromDatetimeLocal(s: string): string {
+  return new Date(s).toISOString()
+}
+
 function formatCurrency(value: number): string {
   if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`
   if (value >= 1_000) return `$${(value / 1_000).toFixed(0)}K`
   return `$${value.toFixed(0)}`
 }
 
-// Format date
 function formatDate(dateStr: string): string {
-  return new Date(dateStr).toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric'
-  })
+  try {
+    const d = new Date(dateStr)
+    if (isNaN(d.getTime())) return dateStr || '—'
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  } catch { return dateStr || '—' }
 }
 
-// Format tenure
 function formatTenure(months: number): string {
   const years = Math.floor(months / 12)
   const remainingMonths = months % 12
@@ -51,136 +71,19 @@ function formatTenure(months: number): string {
   return `${years}y ${remainingMonths}m`
 }
 
-// Mock data generator for CSM profile
-function getMockCSMProfile(csm: CSM): CSMProfile {
-  const isActive = csm.status === 'active'
-  const tenure = isActive ? Math.floor(Math.random() * 48) + 12 : Math.floor(Math.random() * 36) + 6
-  
-  return {
-    id: csm.id,
-    name: csm.name,
-    email: csm.email,
-    status: csm.status,
-    avatar_url: null,
-    title: 'Customer Success Manager',
-    department: 'Customer Success',
-    manager_name: 'Sarah Johnson',
-    phone: '+1 (555) 123-4567',
-    location: 'San Francisco, CA',
-    
-    hire_date: new Date(Date.now() - tenure * 30 * 24 * 60 * 60 * 1000).toISOString(),
-    tenure_months: tenure,
-    last_active: isActive ? new Date().toISOString() : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
-    
-    current_accounts: csm.account_count,
-    current_arr: csm.total_arr,
-    at_risk_accounts: csm.at_risk_count,
-    renewals_next_90_days: Math.floor(csm.account_count * 0.2),
-    
-    total_accounts_managed: csm.account_count + Math.floor(Math.random() * 20) + 5,
-    total_arr_managed_lifetime: csm.total_arr * 1.5 + Math.random() * 10000000,
-    accounts_successfully_renewed: Math.floor(Math.random() * 40) + 20,
-    accounts_churned: Math.floor(Math.random() * 5),
-    renewal_rate: 85 + Math.random() * 12,
-    avg_health_score: 70 + Math.random() * 20,
-    
-    nps_score: Math.floor(Math.random() * 30) + 60,
-    csat_score: 4.2 + Math.random() * 0.6,
-    avg_response_time_hours: 2 + Math.random() * 6,
-  }
+function formatDays(days: number | null): string {
+  if (days == null || days <= 0) return '—'
+  if (days < 30) return `${days}d`
+  if (days < 365) return `${Math.round(days / 30.44)}mo`
+  const y = Math.floor(days / 365)
+  const m = Math.round((days % 365) / 30.44)
+  return m > 0 ? `${y}y ${m}mo` : `${y}y`
 }
 
-// Mock assignment history
-function getMockAssignmentHistory(csmName: string): CSMAssignmentHistoryItem[] {
-  const actions: Array<'assigned' | 'removed' | 'transferred_in' | 'transferred_out'> = [
-    'assigned', 'transferred_in', 'assigned', 'transferred_out', 'removed', 'assigned', 'transferred_in'
-  ]
-  
-  const accounts = [
-    { name: 'Acme Corporation', type: 'Enterprise', arr: 2500000 },
-    { name: 'TechStart Inc', type: 'Mid-Market', arr: 450000 },
-    { name: 'Global Systems', type: 'Enterprise', arr: 3200000 },
-    { name: 'DataFlow Analytics', type: 'SMB', arr: 120000 },
-    { name: 'CloudNet Services', type: 'Mid-Market', arr: 680000 },
-    { name: 'Innovate Labs', type: 'Enterprise', arr: 1800000 },
-    { name: 'SecureBase', type: 'Mid-Market', arr: 520000 },
-    { name: 'FinanceHub', type: 'Enterprise', arr: 4100000 },
-  ]
-  
-  const reasons = [
-    'New customer onboarding',
-    'Territory realignment',
-    'CSM capacity balancing',
-    'Customer request',
-    'Account churn',
-    'CSM departure coverage',
-    'Strategic account assignment',
-  ]
-  
-  const otherCSMs = ['Anna Perez', 'Thomas Nguyen', 'Priya Patel', 'Alex Chen', 'Sarah Robinson']
-  
-  return accounts.slice(0, 7).map((account, i) => {
-    const action = actions[i % actions.length]
-    const daysAgo = (i + 1) * 30 + Math.floor(Math.random() * 30)
-    
-    return {
-      id: `hist-${i}`,
-      account_id: `acc-${i}`,
-      account_name: account.name,
-      account_type: account.type,
-      arr: account.arr,
-      action,
-      action_date: new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000).toISOString(),
-      reason: reasons[i % reasons.length],
-      previous_csm_name: action === 'transferred_in' || action === 'assigned' ? otherCSMs[i % otherCSMs.length] : csmName,
-      new_csm_name: action === 'transferred_out' || action === 'removed' ? otherCSMs[(i + 1) % otherCSMs.length] : csmName,
-      notes: i % 3 === 0 ? 'Priority account - requires extra attention' : null,
-    }
-  })
-}
-
-// Action icon component
-function ActionIcon({ action }: { action: CSMAssignmentHistoryItem['action'] }) {
-  const config = {
-    assigned: { icon: ArrowRight, bg: 'bg-emerald-100', color: 'text-emerald-600' },
-    removed: { icon: XCircle, bg: 'bg-rose-100', color: 'text-rose-600' },
-    transferred_in: { icon: ArrowLeft, bg: 'bg-blue-100', color: 'text-blue-600' },
-    transferred_out: { icon: RefreshCw, bg: 'bg-amber-100', color: 'text-amber-600' },
-  }[action]
-  
-  const Icon = config.icon
-  
-  return (
-    <div className={clsx('w-8 h-8 rounded-full flex items-center justify-center', config.bg)}>
-      <Icon className={clsx('w-4 h-4', config.color)} />
-    </div>
-  )
-}
-
-// Action label
-function getActionLabel(action: CSMAssignmentHistoryItem['action']): string {
-  return {
-    assigned: 'Assigned',
-    removed: 'Removed',
-    transferred_in: 'Transferred In',
-    transferred_out: 'Transferred Out',
-  }[action]
-}
-
-// Stat Card for profile
 function ProfileStatCard({ 
-  icon: Icon, 
-  label, 
-  value, 
-  subValue,
-  trend,
-  color = 'slate'
+  icon: Icon, label, value, subValue, color = 'slate'
 }: { 
-  icon: typeof Users
-  label: string
-  value: string | number
-  subValue?: string
-  trend?: 'up' | 'down' | 'neutral'
+  icon: typeof Users; label: string; value: string | number; subValue?: string
   color?: 'slate' | 'emerald' | 'amber' | 'rose' | 'blue' | 'violet'
 }) {
   const colorClasses = {
@@ -191,7 +94,6 @@ function ProfileStatCard({
     blue: 'bg-blue-100 text-blue-600',
     violet: 'bg-violet-100 text-violet-600',
   }
-  
   return (
     <div className="bg-white rounded-lg border border-slate-200 p-3">
       <div className="flex items-center gap-2 mb-1">
@@ -203,16 +105,720 @@ function ProfileStatCard({
       <div className="flex items-baseline gap-2">
         <span className="text-lg font-bold text-slate-800">{value}</span>
         {subValue && <span className="text-xs text-slate-500">{subValue}</span>}
-        {trend && (
-          trend === 'up' ? <TrendingUp className="w-3 h-3 text-emerald-500" /> :
-          trend === 'down' ? <TrendingDown className="w-3 h-3 text-rose-500" /> : null
-        )}
       </div>
     </div>
   )
 }
 
-// Main component
+// ── Monthly data point for the chart ──
+interface MonthlyPoint {
+  label: string
+  year: number
+  month: number
+  cumulative: number
+  received: number
+  handedOff: number
+  net: number
+}
+
+function buildMonthlyTimeline(records: CSMAssignmentRecord[]): MonthlyPoint[] {
+  if (!records.length) return []
+
+  const parseMonth = (dateStr: string | null): { y: number; m: number } | null => {
+    if (!dateStr || dateStr === '-' || dateStr === 'null' || dateStr === 'None') return null
+    try {
+      const d = new Date(dateStr)
+      if (isNaN(d.getTime())) return null
+      return { y: d.getFullYear(), m: d.getMonth() + 1 }
+    } catch { return null }
+  }
+
+  const monthLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+  let minDate: { y: number; m: number } | null = null
+  const maxDate: { y: number; m: number } = { y: new Date().getFullYear(), m: new Date().getMonth() + 1 }
+
+  for (const r of records) {
+    const d = parseMonth(r.assigned_from)
+    if (d && (!minDate || d.y < minDate.y || (d.y === minDate.y && d.m < minDate.m))) {
+      minDate = d
+    }
+  }
+  if (!minDate) minDate = { y: maxDate.y - 1, m: maxDate.m }
+
+  // Ensure at least 6 months of range so the chart is meaningful
+  const minTotal = minDate.y * 12 + minDate.m
+  const maxTotal = maxDate.y * 12 + maxDate.m
+  if (maxTotal - minTotal < 6) {
+    const adjusted = minTotal - (6 - (maxTotal - minTotal))
+    minDate = { y: Math.floor((adjusted - 1) / 12), m: ((adjusted - 1) % 12) + 1 }
+  }
+
+  const key = (yr: number, mo: number) => `${yr}-${String(mo).padStart(2, '0')}`
+  const received: Record<string, number> = {}
+  const handedOff: Record<string, number> = {}
+
+  for (const r of records) {
+    const d = parseMonth(r.assigned_from)
+    if (d) received[key(d.y, d.m)] = (received[key(d.y, d.m)] || 0) + 1
+
+    if (r.status === 'Handed Off') {
+      const u = parseMonth(r.assigned_until)
+      if (u) handedOff[key(u.y, u.m)] = (handedOff[key(u.y, u.m)] || 0) + 1
+    }
+  }
+
+  const points: MonthlyPoint[] = []
+  let cumulative = 0
+  let y = minDate.y, m = minDate.m
+  while (y < maxDate.y || (y === maxDate.y && m <= maxDate.m)) {
+    const k = key(y, m)
+    const recv = received[k] || 0
+    const left = handedOff[k] || 0
+    cumulative += recv - left
+    points.push({
+      label: `${monthLabels[m - 1]} ${y}`,
+      year: y, month: m,
+      cumulative: Math.max(cumulative, 0),
+      received: recv, handedOff: left,
+      net: recv - left,
+    })
+    m++
+    if (m > 12) { m = 1; y++ }
+  }
+  return points
+}
+
+// ── Assignment Chart (SVG, Customer Growth style) ──
+function AssignmentChart({ data, hoveredIndex, onHover }: {
+  data: MonthlyPoint[]
+  hoveredIndex: number | null
+  onHover: (idx: number | null) => void
+}) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const svgRef = useRef<SVGSVGElement>(null)
+  const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number } | null>(null)
+
+  if (data.length < 1) return null
+
+  // Pad single-point data so we can still draw a line
+  const chartData = data.length === 1 ? [{ ...data[0], cumulative: 0, received: 0, handedOff: 0, net: 0 }, data[0]] : data
+
+  const W = 900
+  const lineH = 180
+  const barH = 55
+  const gapY = 10
+  const totalH = lineH + gapY + barH
+  const padX = 30
+  const padYTop = 14
+  const padYBot = 4
+
+  const values = chartData.map(d => d.cumulative)
+  const minVal = Math.min(...values) * 0.95
+  const maxVal = Math.max(...values) * 1.05
+  const valRange = maxVal - minVal || 1
+
+  const linePoints = chartData.map((_, i) => ({
+    x: padX + (i / Math.max(chartData.length - 1, 1)) * (W - 2 * padX),
+    y: padYTop + (1 - (values[i] - minVal) / valRange) * (lineH - padYTop - padYBot),
+  }))
+
+  let linePath = `M ${linePoints[0].x} ${linePoints[0].y}`
+  for (let i = 1; i < linePoints.length; i++) {
+    const prev = linePoints[i - 1]
+    const curr = linePoints[i]
+    const cpx = (prev.x + curr.x) / 2
+    linePath += ` C ${cpx} ${prev.y}, ${cpx} ${curr.y}, ${curr.x} ${curr.y}`
+  }
+  const areaPath = `${linePath} L ${linePoints[linePoints.length - 1].x} ${lineH} L ${linePoints[0].x} ${lineH} Z`
+
+  const segments: { path: string; color: string }[] = []
+  for (let i = 0; i < linePoints.length - 1; i++) {
+    const prev = linePoints[i]
+    const curr = linePoints[i + 1]
+    const cpx = (prev.x + curr.x) / 2
+    const isUp = chartData[i + 1].net >= 0
+    segments.push({
+      path: `M ${prev.x} ${prev.y} C ${cpx} ${prev.y}, ${cpx} ${curr.y}, ${curr.x} ${curr.y}`,
+      color: isUp ? '#10b981' : '#f43f5e',
+    })
+  }
+
+  // Y-axis ticks
+  const yTicks = useMemo(() => {
+    const step = Math.ceil(valRange / 4 / 5) * 5 || 1
+    const ticks: number[] = []
+    let v = Math.floor(minVal / step) * step
+    while (v <= maxVal + step) {
+      if (v >= minVal && v <= maxVal) ticks.push(v)
+      v += step
+    }
+    return ticks.length ? ticks : [Math.round(minVal), Math.round(maxVal)]
+  }, [minVal, maxVal, valRange])
+
+  // Bar data
+  const barTop = lineH + gapY
+  const maxBarVal = Math.max(...chartData.map(d => Math.max(d.received, d.handedOff)), 1)
+  const barMid = barTop + barH / 2
+  const maxBarH = barH / 2 - 4
+  const barGap = (W - 2 * padX) / Math.max(chartData.length, 1)
+  const barW = Math.min(10, barGap * 0.55)
+
+  const handleMouseMove = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
+    if (!svgRef.current || !containerRef.current) return
+    const svgRect = svgRef.current.getBoundingClientRect()
+    const containerRect = containerRef.current.getBoundingClientRect()
+    const relX = e.clientX - svgRect.left
+    const ratio = (relX - (padX / W) * svgRect.width) / (svgRect.width * (1 - 2 * padX / W))
+    const idx = Math.round(Math.max(0, Math.min(chartData.length - 1, ratio * (chartData.length - 1))))
+    if (idx >= 0 && idx < chartData.length) {
+      onHover(idx)
+      setTooltipPos({ x: e.clientX - containerRect.left, y: e.clientY - containerRect.top })
+    }
+  }, [chartData.length, onHover])
+
+  const handleMouseLeave = useCallback(() => { onHover(null); setTooltipPos(null) }, [onHover])
+
+  const hovPt = hoveredIndex !== null && hoveredIndex >= 0 && hoveredIndex < chartData.length ? chartData[hoveredIndex] : null
+
+  return (
+    <div ref={containerRef} className="relative bg-white rounded-xl border border-slate-200 p-4">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Account Portfolio Over Time</h3>
+      </div>
+
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${W} ${totalH}`}
+        className="w-full"
+        style={{ height: 'auto', maxHeight: 260 }}
+        onMouseMove={handleMouseMove}
+        onMouseLeave={handleMouseLeave}
+      >
+        {/* Y-axis */}
+        {yTicks.map(v => {
+          const y = padYTop + (1 - (v - minVal) / valRange) * (lineH - padYTop - padYBot)
+          return (
+            <g key={v}>
+              <line x1={padX} y1={y} x2={W - padX} y2={y} stroke="#f1f5f9" strokeWidth="1" />
+              <text x={padX - 6} y={y + 3} textAnchor="end" className="text-[9px] fill-slate-400 font-medium">{v}</text>
+            </g>
+          )
+        })}
+
+        {/* Area + line */}
+        <defs>
+          <linearGradient id="areaGradCSM" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#10b981" stopOpacity="0.15" />
+            <stop offset="100%" stopColor="#10b981" stopOpacity="0.01" />
+          </linearGradient>
+        </defs>
+        <path d={areaPath} fill="url(#areaGradCSM)" />
+        {segments.map((seg, i) => (
+          <path key={i} d={seg.path} fill="none" stroke={seg.color} strokeWidth="2.5" strokeLinecap="round" />
+        ))}
+
+        {/* Bars */}
+        {chartData.map((pt, i) => {
+          const cx = padX + (i / Math.max(chartData.length - 1, 1)) * (W - 2 * padX)
+          const isHov = hoveredIndex === i
+          const recvH = (pt.received / maxBarVal) * maxBarH
+          const leftH = (pt.handedOff / maxBarVal) * maxBarH
+          return (
+            <g key={i}>
+              {pt.received > 0 && (
+                <rect x={cx - barW / 2} y={barMid - recvH} width={barW} height={recvH} rx={2}
+                  fill={isHov ? '#059669' : '#10b981'} opacity={isHov ? 1 : 0.7} />
+              )}
+              {pt.handedOff > 0 && (
+                <rect x={cx - barW / 2} y={barMid} width={barW} height={leftH} rx={2}
+                  fill={isHov ? '#e11d48' : '#f43f5e'} opacity={isHov ? 1 : 0.7} />
+              )}
+            </g>
+          )
+        })}
+
+        {/* Hover crosshair + dot */}
+        {hoveredIndex !== null && linePoints[hoveredIndex] && (
+          <>
+            <line x1={linePoints[hoveredIndex].x} y1={0} x2={linePoints[hoveredIndex].x} y2={totalH}
+              stroke="#94a3b8" strokeWidth="1" strokeDasharray="4 3" />
+            <circle cx={linePoints[hoveredIndex].x} cy={linePoints[hoveredIndex].y} r="5"
+              fill="white" stroke="#3c83f6" strokeWidth="2.5" />
+          </>
+        )}
+      </svg>
+
+      {/* X-axis labels */}
+      <div className="flex justify-between mt-1" style={{ paddingLeft: `${(padX / W) * 100}%`, paddingRight: `${(padX / W) * 100}%` }}>
+        {chartData.filter((_, i) => i % Math.max(1, Math.floor(chartData.length / 7)) === 0 || i === chartData.length - 1).map(pt => (
+          <span key={`${pt.year}-${pt.month}`} className="text-[9px] text-slate-400 font-medium">{pt.label}</span>
+        ))}
+      </div>
+
+      {/* Tooltip */}
+      {tooltipPos && hovPt && (
+        <div className="absolute z-50 pointer-events-none"
+          style={{ left: tooltipPos.x, top: Math.max(8, tooltipPos.y - 100), transform: 'translateX(-50%)' }}>
+          <div className="bg-slate-900/95 backdrop-blur-sm text-white rounded-xl px-4 py-3 shadow-2xl text-xs min-w-[170px]">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="font-bold text-[12px]">{hovPt.label}</span>
+              <span className="text-[11px] font-bold text-blue-300">{hovPt.cumulative} accounts</span>
+            </div>
+            {hovPt.received > 0 && (
+              <div className="flex items-center gap-1.5 mb-0.5">
+                <div className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                <span className="text-emerald-400 text-[11px]">+{hovPt.received} received</span>
+              </div>
+            )}
+            {hovPt.handedOff > 0 && (
+              <div className="flex items-center gap-1.5 mb-0.5">
+                <div className="w-1.5 h-1.5 rounded-full bg-rose-400" />
+                <span className="text-rose-400 text-[11px]">-{hovPt.handedOff} handed off</span>
+              </div>
+            )}
+            <div className="flex items-center justify-between pt-1.5 border-t border-slate-700/60 mt-1">
+              <span className="text-[10px] text-slate-400 uppercase tracking-wider">Net</span>
+              <span className={clsx('font-bold text-[12px]',
+                hovPt.net > 0 ? 'text-emerald-400' : hovPt.net < 0 ? 'text-rose-400' : 'text-slate-400'
+              )}>{hovPt.net > 0 ? '+' : ''}{hovPt.net}</span>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+type AssignmentDialogState =
+  | null
+  | { mode: 'add' }
+  | { mode: 'edit'; record: CSMAssignmentRecord }
+
+function resolveHandoffIdFromName(name: string, csms: { id: string; name: string }[]): string | null {
+  const t = name.trim().toLowerCase()
+  if (!t) return null
+  const m = csms.find(c => c.name.trim().toLowerCase() === t)
+  return m?.id ?? null
+}
+
+// ── Events Table ──
+function AssignmentEventsTable({ records, statusFilter, onStatusFilter, csmId, csmName }: {
+  records: CSMAssignmentRecord[]
+  statusFilter: string | null
+  onStatusFilter: (f: string | null) => void
+  csmId: string
+  csmName: string
+}) {
+  const queryClient = useQueryClient()
+  const [dialog, setDialog] = useState<AssignmentDialogState>(null)
+  const [form, setForm] = useState({
+    account_name: '',
+    handed_off_from: '',
+    assigned_from: '',
+    assigned_until: '',
+    openEnded: true,
+    status: 'Current' as string,
+  })
+
+  const { data: distinctNames = [] } = useQuery({
+    queryKey: ['csm-assignment-history-distinct-names'],
+    queryFn: getDistinctCsmNamesFromHistory,
+    staleTime: 5 * 60 * 1000,
+  })
+
+  const { data: csmsResponse } = useQuery({
+    queryKey: ['csms', 'handoff-lookup'],
+    queryFn: () => getCSMs({}),
+    staleTime: 5 * 60 * 1000,
+  })
+  const csms = csmsResponse?.csms ?? []
+
+  const nameOptions = useMemo(() => {
+    const s = new Set<string>(distinctNames)
+    for (const r of records) {
+      if (r.handed_off_from?.trim()) s.add(r.handed_off_from.trim())
+      if (r.csm_name?.trim()) s.add(r.csm_name.trim())
+    }
+    return Array.from(s).sort((a, b) => a.localeCompare(b))
+  }, [distinctNames, records])
+
+  const closeDialog = useCallback(() => setDialog(null), [])
+
+  const updateMut = useMutation({
+    mutationFn: updateCSMAssignmentHistory,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['csm-assignment-history', csmId] })
+      queryClient.invalidateQueries({ queryKey: ['csm-assignment-history-distinct-names'] })
+      closeDialog()
+    },
+  })
+
+  const createMut = useMutation({
+    mutationFn: createCSMAssignmentHistory,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['csm-assignment-history', csmId] })
+      queryClient.invalidateQueries({ queryKey: ['csm-assignment-history-distinct-names'] })
+      closeDialog()
+    },
+  })
+
+  const deleteMut = useMutation({
+    mutationFn: deleteCSMAssignmentHistory,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['csm-assignment-history', csmId] })
+    },
+  })
+
+  const openAdd = useCallback(() => {
+    setForm({
+      account_name: '',
+      handed_off_from: '',
+      assigned_from: toDatetimeLocalValue(new Date().toISOString()),
+      assigned_until: '',
+      openEnded: true,
+      status: 'Current',
+    })
+    setDialog({ mode: 'add' })
+  }, [])
+
+  const openEdit = useCallback((r: CSMAssignmentRecord) => {
+    const open = !r.assigned_until || r.assigned_until === '-' || String(r.assigned_until).trim() === ''
+    const isHanded = r.status === 'Handed Off'
+    setForm({
+      account_name: r.account_name,
+      handed_off_from: r.handed_off_from && r.handed_off_from !== 'null' ? r.handed_off_from : '',
+      assigned_from: toDatetimeLocalValue(r.assigned_from),
+      assigned_until: !open ? toDatetimeLocalValue(r.assigned_until) : '',
+      openEnded: open && !isHanded,
+      status: isHanded ? 'Handed Off' : 'Current',
+    })
+    setDialog({ mode: 'edit', record: r })
+  }, [])
+
+  const payloadUntilIso = useCallback((): string | null => {
+    if (form.status === 'Handed Off') {
+      return form.assigned_until.trim() ? fromDatetimeLocal(form.assigned_until) : null
+    }
+    if (form.status === 'Current') {
+      if (form.openEnded) return null
+      return form.assigned_until.trim() ? fromDatetimeLocal(form.assigned_until) : null
+    }
+    return null
+  }, [form])
+
+  const save = useCallback(() => {
+    const ho = form.handed_off_from.trim()
+    const hoId = ho ? resolveHandoffIdFromName(ho, csms) : null
+    const untilIso = payloadUntilIso()
+
+    if (form.status === 'Handed Off' && !form.assigned_until.trim()) {
+      window.alert('Enter the handoff date when status is Handed Off.')
+      return
+    }
+    if (form.status === 'Current' && !form.openEnded && !form.assigned_until.trim()) {
+      window.alert('Enter an end date, or check “still active”.')
+      return
+    }
+    if (!form.assigned_from.trim()) return
+
+    if (dialog?.mode === 'add') {
+      const acc = form.account_name.trim()
+      if (!acc) {
+        window.alert('Enter an account name.')
+        return
+      }
+      createMut.mutate({
+        csm_id: csmId,
+        csm_name: csmName,
+        account_name: acc,
+        assigned_from: fromDatetimeLocal(form.assigned_from),
+        assigned_until: untilIso,
+        handed_off_from: ho || null,
+        handed_off_from_id: hoId,
+        status: form.status,
+      })
+      return
+    }
+    if (dialog?.mode === 'edit' && dialog.record.assigned_from) {
+      updateMut.mutate({
+        csm_id: csmId,
+        account_name: dialog.record.account_name,
+        assigned_from_key: dialog.record.assigned_from,
+        handed_off_from: ho || null,
+        handed_off_from_id: hoId,
+        assigned_from: fromDatetimeLocal(form.assigned_from),
+        assigned_until: untilIso,
+        status: form.status,
+      })
+    }
+  }, [form, dialog, csmId, csmName, csms, payloadUntilIso, createMut, updateMut])
+
+  const confirmDelete = useCallback((r: CSMAssignmentRecord) => {
+    if (!r.assigned_from) return
+    if (!window.confirm(`Remove assignment history for "${r.account_name}"? This cannot be undone.`)) return
+    deleteMut.mutate({ csm_id: csmId, account_name: r.account_name, assigned_from: r.assigned_from })
+  }, [csmId, deleteMut])
+
+  const filtered = useMemo(() => {
+    if (!statusFilter) return records
+    return records.filter(r => r.status === statusFilter)
+  }, [records, statusFilter])
+
+  const pending = updateMut.isPending || createMut.isPending
+
+  const modal = dialog && (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40"
+      onClick={closeDialog}
+      role="presentation"
+    >
+      <div
+        role="dialog"
+        aria-modal
+        className="bg-white rounded-xl shadow-2xl border border-slate-200 p-5 max-w-lg w-full max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h4 className="text-sm font-semibold text-slate-800 mb-1 truncate">
+          {dialog.mode === 'add' ? 'Add assignment' : dialog.record.account_name}
+        </h4>
+        <p className="text-[10px] text-slate-400 mb-4">
+          {dialog.mode === 'add'
+            ? 'Create a row in assignment history for this CSM.'
+            : 'Update this row in the assignment history table.'}
+        </p>
+        <div className="space-y-3 text-left">
+          {dialog.mode === 'add' && (
+            <label className="block">
+              <span className="text-[10px] font-semibold text-slate-500 uppercase">Account</span>
+              <input
+                type="text"
+                value={form.account_name}
+                onChange={(e) => setForm(f => ({ ...f, account_name: e.target.value }))}
+                className="mt-1 w-full px-2 py-1.5 text-sm border border-slate-200 rounded-lg"
+                placeholder="Account name"
+              />
+            </label>
+          )}
+          <label className="block">
+            <span className="text-[10px] font-semibold text-slate-500 uppercase">Handed off from</span>
+            <select
+              value={form.handed_off_from}
+              onChange={(e) => setForm(f => ({ ...f, handed_off_from: e.target.value }))}
+              className="mt-1 w-full px-2 py-1.5 text-sm border border-slate-200 rounded-lg bg-white"
+            >
+              <option value="">— None —</option>
+              {nameOptions.map(n => (
+                <option key={n} value={n}>{n}</option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="text-[10px] font-semibold text-slate-500 uppercase">Assigned from</span>
+            <input
+              type="datetime-local"
+              value={form.assigned_from}
+              onChange={(e) => setForm(f => ({ ...f, assigned_from: e.target.value }))}
+              className="mt-1 w-full px-2 py-1.5 text-sm border border-slate-200 rounded-lg"
+            />
+          </label>
+          <label className="block">
+            <span className="text-[10px] font-semibold text-slate-500 uppercase">Status</span>
+            <select
+              value={form.status}
+              onChange={(e) => {
+                const v = e.target.value
+                setForm(f => ({
+                  ...f,
+                  status: v,
+                  openEnded: v === 'Handed Off' ? false : f.openEnded,
+                  assigned_until: v === 'Handed Off' && !f.assigned_until
+                    ? toDatetimeLocalValue(new Date().toISOString())
+                    : f.assigned_until,
+                }))
+              }}
+              className="mt-1 w-full px-2 py-1.5 text-sm border border-slate-200 rounded-lg bg-white"
+            >
+              <option value="Current">Current</option>
+              <option value="Handed Off">Handed Off</option>
+            </select>
+          </label>
+          {form.status === 'Current' && (
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={form.openEnded}
+                onChange={(e) =>
+                  setForm(f => ({ ...f, openEnded: e.target.checked, assigned_until: e.target.checked ? '' : f.assigned_until }))
+                }
+                className="rounded border-slate-300"
+              />
+              <span className="text-xs text-slate-600">No end date (still active / present)</span>
+            </label>
+          )}
+          {form.status === 'Handed Off' && (
+            <label className="block">
+              <span className="text-[10px] font-semibold text-slate-500 uppercase">Handoff date</span>
+              <input
+                type="datetime-local"
+                value={form.assigned_until}
+                onChange={(e) => setForm(f => ({ ...f, assigned_until: e.target.value }))}
+                className="mt-1 w-full px-2 py-1.5 text-sm border border-slate-200 rounded-lg"
+              />
+              <p className="text-[10px] text-slate-400 mt-1">When this assignment ended (required for Handed Off).</p>
+            </label>
+          )}
+          {form.status === 'Current' && !form.openEnded && (
+            <label className="block">
+              <span className="text-[10px] font-semibold text-slate-500 uppercase">Assigned until</span>
+              <input
+                type="datetime-local"
+                value={form.assigned_until}
+                onChange={(e) => setForm(f => ({ ...f, assigned_until: e.target.value }))}
+                className="mt-1 w-full px-2 py-1.5 text-sm border border-slate-200 rounded-lg"
+              />
+            </label>
+          )}
+        </div>
+        {(updateMut.isError || createMut.isError) && (
+          <p className="text-xs text-rose-600 mt-2">Save failed. Check permissions or duplicate row.</p>
+        )}
+        <div className="flex justify-end gap-2 mt-5">
+          <button type="button" onClick={closeDialog} className="px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 rounded-lg">
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={save}
+            disabled={pending || !form.assigned_from}
+            className="px-3 py-1.5 text-sm font-medium bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
+          >
+            {pending ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+
+  return (
+    <>
+      {typeof document !== 'undefined' && modal && createPortal(modal, document.body)}
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+      <div className="px-4 py-3 border-b border-slate-100">
+        <div className="flex items-center justify-between mb-2 gap-2">
+          <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Assignment Events</h3>
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="text-[10px] text-slate-400 font-medium">
+              {statusFilter ? `${filtered.length} of ${records.length}` : `${records.length}`} events
+            </span>
+            <button
+              type="button"
+              onClick={openAdd}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-semibold bg-primary-50 text-primary-700 border border-primary-200 hover:bg-primary-100"
+            >
+              <Plus className="w-3 h-3" />
+              Add
+            </button>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {['Current', 'Handed Off'].map(s => (
+            <button key={s} onClick={() => onStatusFilter(statusFilter === s ? null : s)}
+              className={clsx(
+                'px-2.5 py-1 rounded-lg text-[10px] font-semibold border transition-all',
+                statusFilter === s
+                  ? s === 'Current' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-slate-100 border-slate-300 text-slate-600'
+                  : 'bg-slate-50 border-slate-200 text-slate-500 hover:border-slate-300'
+              )}>
+              {s}
+            </button>
+          ))}
+          {statusFilter && (
+            <button onClick={() => onStatusFilter(null)}
+              className="text-[10px] text-slate-400 hover:text-primary-600 font-medium px-1.5">
+              Clear
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-[auto_24px_1fr_90px_70px_90px_76px] items-center gap-2 px-4 py-2 bg-slate-50/80 border-b border-slate-100 text-[9px] font-bold uppercase tracking-wider text-slate-400">
+        <span className="w-5"></span>
+        <span></span>
+        <span>Account</span>
+        <span>Status</span>
+        <span className="text-right">Duration</span>
+        <span className="text-right">Handed From</span>
+        <span className="text-right">Actions</span>
+      </div>
+
+      <div className="max-h-80 overflow-y-auto divide-y divide-slate-50">
+        {filtered.map((r, i) => {
+          const isCurrent = r.status === 'Current'
+          return (
+            <div key={`${r.account_name}-${r.assigned_from}-${i}`}
+              className="grid grid-cols-[auto_24px_1fr_90px_70px_90px_76px] items-center gap-2 px-4 py-2 hover:bg-slate-50/50 transition-colors">
+              <span className="text-[9px] text-slate-300 font-medium w-5 text-right">{i + 1}</span>
+              <div className="flex justify-center">
+                <div className={clsx('w-2 h-2 rounded-full', isCurrent ? 'bg-emerald-500' : 'bg-slate-400')} />
+              </div>
+              <div className="min-w-0">
+                <p className="text-[12px] font-medium text-slate-800 truncate">{r.account_name}</p>
+                <p className="text-[10px] text-slate-400 truncate">
+                  {r.assigned_from ? formatDate(r.assigned_from) : '—'}
+                  {r.assigned_until && r.assigned_until !== '-' ? ` → ${formatDate(r.assigned_until)}` : ' → present'}
+                </p>
+              </div>
+              <div>
+                <span className={clsx(
+                  'text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full',
+                  isCurrent ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'
+                )}>
+                  {r.status}
+                </span>
+              </div>
+              <span className="text-[11px] text-slate-500 font-medium text-right">{formatDays(r.days_held)}</span>
+              <span className="text-[10px] text-slate-400 text-right truncate" title={r.handed_off_from || ''}>
+                {r.handed_off_from || '—'}
+              </span>
+              <div className="flex items-center justify-end gap-1">
+                <button
+                  type="button"
+                  onClick={() => openEdit(r)}
+                  className="p-1.5 rounded-lg text-slate-500 hover:bg-primary-50 hover:text-primary-600"
+                  title="Edit"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => confirmDelete(r)}
+                  disabled={deleteMut.isPending}
+                  className="p-1.5 rounded-lg text-slate-500 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50"
+                  title="Delete"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+      {filtered.length === 0 && (
+        <div className="px-4 py-8 text-center text-sm text-slate-400">
+          {records.length === 0
+            ? 'No assignment history yet. Use Add to create a row.'
+            : 'No rows match this filter.'}
+        </div>
+      )}
+    </div>
+    </>
+  )
+}
+
+// ── Main Panel ──
+type PanelTab = 'profile' | 'history'
+
 interface CSMProfilePanelProps {
   csm: CSM
   isOpen: boolean
@@ -220,25 +826,52 @@ interface CSMProfilePanelProps {
 }
 
 export function CSMProfilePanel({ csm, isOpen, onClose }: CSMProfilePanelProps) {
-  // Generate mock data
-  const profile = useMemo(() => getMockCSMProfile(csm), [csm])
-  const history = useMemo(() => getMockAssignmentHistory(csm.name), [csm.name])
-  
-  if (!isOpen) return null
-  
-  const isInactive = csm.status === 'inactive'
+  const [activeTab, setActiveTab] = useState<PanelTab>('profile')
+  const [hoveredChartIdx, setHoveredChartIdx] = useState<number | null>(null)
+  const [statusFilter, setStatusFilter] = useState<string | null>(null)
+
+  const { data: profile, isLoading: profileLoading, isError: profileError } = useCSMProfile(isOpen ? csm.id : null)
+  const { data: historyData, isLoading: historyLoading } = useCSMAssignmentHistory(isOpen ? csm.id : null)
+
   const isDeparted = csm.status === 'departed'
-  
+  const isInactive = csm.status === 'inactive'
+
+  const displayProfile = useMemo(() => {
+    if (!profile) return null
+    return {
+      title: profile.title || 'Customer Success Manager',
+      department: profile.department || 'Customer Success',
+      phone: profile.phone || profile.mobile_phone,
+      location: profile.location,
+      reports_to: profile.reports_to,
+      joined_date: profile.joined_date,
+      tenure_months: profile.tenure_months,
+      email: profile.email || csm.email,
+      region: profile.region,
+      timezone: profile.timezone,
+    }
+  }, [profile, csm.email])
+
+  const timeline = useMemo(() => buildMonthlyTimeline(historyData || []), [historyData])
+
+  const historySummary = useMemo(() => {
+    if (!historyData || !historyData.length) return null
+    const current = historyData.filter(r => r.status === 'Current').length
+    const totalManaged = new Set(historyData.map(r => r.account_name)).size
+    const handedOff = historyData.filter(r => r.status === 'Handed Off').length
+    const received = historyData.filter(r => r.handed_off_from && r.handed_off_from !== 'null').length
+    const daysArr = historyData.filter(r => r.days_held != null && r.days_held > 0).map(r => r.days_held!)
+    const avgDays = daysArr.length ? Math.round(daysArr.reduce((a, b) => a + b, 0) / daysArr.length) : 0
+    return { current, totalManaged, handedOff, received, avgDays }
+  }, [historyData])
+
+  if (!isOpen) return null
+
   return (
     <>
-      {/* Backdrop */}
-      <div 
-        className="fixed inset-0 bg-black/20 z-40 transition-opacity"
-        onClick={onClose}
-      />
-      
-      {/* Panel */}
-      <div className="fixed right-0 top-0 h-full w-full max-w-xl bg-white shadow-2xl z-50 overflow-hidden flex flex-col animate-slide-in-right">
+      <div className="fixed inset-0 top-[57px] bg-black/20 z-40 transition-opacity" onClick={onClose} />
+
+      <div className="fixed right-0 top-[57px] bottom-0 w-full max-w-5xl bg-white shadow-2xl z-50 overflow-hidden flex flex-col animate-slide-in-right">
         {/* Header */}
         <div className={clsx(
           'px-6 py-4 border-b flex items-start justify-between',
@@ -249,281 +882,224 @@ export function CSMProfilePanel({ csm, isOpen, onClose }: CSMProfilePanelProps) 
           <div className="flex items-center gap-4">
             <div className={clsx(
               'w-14 h-14 rounded-full flex items-center justify-center text-white text-xl font-bold',
-              isDeparted ? 'bg-slate-400' :
-              isInactive ? 'bg-slate-400' :
-              'bg-gradient-to-br from-primary-500 to-primary-700'
+              isDeparted ? 'bg-slate-400' : isInactive ? 'bg-slate-400' : 'bg-gradient-to-br from-primary-500 to-primary-700'
             )}>
               {csm.name.split(' ').map(n => n[0]).join('')}
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className={clsx(
-                  'text-xl font-bold',
-                  isDeparted ? 'text-slate-500 line-through' : 'text-slate-800'
-                )}>
+                <h2 className={clsx('text-xl font-bold', isDeparted ? 'text-slate-500 line-through' : 'text-slate-800')}>
                   {csm.name}
                 </h2>
-                {isDeparted && (
-                  <span className="px-2 py-0.5 bg-rose-100 text-rose-700 text-xs font-medium rounded-full">
-                    Departed
-                  </span>
-                )}
-                {isInactive && (
-                  <span className="px-2 py-0.5 bg-slate-200 text-slate-600 text-xs font-medium rounded-full">
-                    Inactive
-                  </span>
-                )}
+                {isDeparted && <span className="px-2 py-0.5 bg-rose-100 text-rose-700 text-xs font-medium rounded-full">Departed</span>}
+                {isInactive && <span className="px-2 py-0.5 bg-slate-200 text-slate-600 text-xs font-medium rounded-full">Inactive</span>}
               </div>
-              <p className="text-sm text-slate-500">{profile.title}</p>
-              <div className="flex items-center gap-3 mt-1 text-xs text-slate-500">
-                <span className="flex items-center gap-1">
-                  <Briefcase className="w-3 h-3" />
-                  {profile.department}
-                </span>
-                {profile.tenure_months && (
-                  <span className="flex items-center gap-1">
-                    <Clock className="w-3 h-3" />
-                    {formatTenure(profile.tenure_months)} tenure
-                  </span>
-                )}
-              </div>
+              {profileLoading ? (
+                <div className="h-4 w-40 bg-slate-200 rounded animate-pulse mt-1" />
+              ) : (
+                <>
+                  <p className="text-sm text-slate-500">{displayProfile?.title}</p>
+                  <div className="flex items-center gap-3 mt-1 text-xs text-slate-500">
+                    <span className="flex items-center gap-1"><Briefcase className="w-3 h-3" />{displayProfile?.department}</span>
+                    {displayProfile?.tenure_months != null && (
+                      <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{formatTenure(displayProfile.tenure_months)} tenure</span>
+                    )}
+                  </div>
+                </>
+              )}
             </div>
           </div>
-          <button 
-            onClick={onClose}
-            className="p-2 text-slate-400 hover:text-slate-600 hover:bg-white/50 rounded-lg transition-colors"
-          >
+          <button onClick={onClose} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-white/50 rounded-lg transition-colors">
             <X className="w-5 h-5" />
           </button>
         </div>
-        
+
+        {/* Tabs */}
+        <div className="flex border-b border-slate-200 bg-white px-6">
+          <button
+            onClick={() => setActiveTab('profile')}
+            className={clsx(
+              'flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px',
+              activeTab === 'profile'
+                ? 'border-primary-500 text-primary-600'
+                : 'border-transparent text-slate-500 hover:text-slate-700'
+            )}>
+            <User className="w-3.5 h-3.5" />
+            Profile
+          </button>
+          <button
+            onClick={() => setActiveTab('history')}
+            className={clsx(
+              'flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px',
+              activeTab === 'history'
+                ? 'border-primary-500 text-primary-600'
+                : 'border-transparent text-slate-500 hover:text-slate-700'
+            )}>
+            <History className="w-3.5 h-3.5" />
+            Assignment History
+            {historyData && historyData.length > 0 && (
+              <span className="ml-1 px-1.5 py-0.5 bg-slate-100 text-slate-500 text-[10px] font-bold rounded-full">
+                {historyData.length}
+              </span>
+            )}
+          </button>
+        </div>
+
         {/* Content */}
         <div className="flex-1 overflow-y-auto">
-          {/* Contact Info */}
-          <div className="px-6 py-4 border-b border-slate-100">
-            <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Contact Information</h3>
-            <div className="grid grid-cols-2 gap-3">
-              {profile.email && (
-                <div className="flex items-center gap-2 text-sm">
-                  <Mail className="w-4 h-4 text-slate-400" />
-                  <span className="text-slate-600 truncate">{profile.email}</span>
-                </div>
-              )}
-              {profile.phone && (
-                <div className="flex items-center gap-2 text-sm">
-                  <Phone className="w-4 h-4 text-slate-400" />
-                  <span className="text-slate-600">{profile.phone}</span>
-                </div>
-              )}
-              {profile.location && (
-                <div className="flex items-center gap-2 text-sm">
-                  <MapPin className="w-4 h-4 text-slate-400" />
-                  <span className="text-slate-600">{profile.location}</span>
-                </div>
-              )}
-              {profile.manager_name && (
-                <div className="flex items-center gap-2 text-sm">
-                  <Building className="w-4 h-4 text-slate-400" />
-                  <span className="text-slate-600">Reports to {profile.manager_name}</span>
-                </div>
-              )}
-              {profile.hire_date && (
-                <div className="flex items-center gap-2 text-sm">
-                  <Calendar className="w-4 h-4 text-slate-400" />
-                  <span className="text-slate-600">Joined {formatDate(profile.hire_date)}</span>
-                </div>
-              )}
-            </div>
-          </div>
-          
-          {/* Current Portfolio Stats */}
-          <div className="px-6 py-4 border-b border-slate-100">
-            <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">
-              {isDeparted ? 'Final Portfolio' : 'Current Portfolio'}
-            </h3>
-            <div className="grid grid-cols-2 gap-3">
-              <ProfileStatCard
-                icon={Users}
-                label="Accounts"
-                value={profile.current_accounts}
-                color="blue"
-              />
-              <ProfileStatCard
-                icon={DollarSign}
-                label="ARR Managed"
-                value={formatCurrency(profile.current_arr)}
-                color="emerald"
-              />
-              <ProfileStatCard
-                icon={AlertTriangle}
-                label="Needs Attention"
-                value={profile.at_risk_accounts}
-                color={profile.at_risk_accounts > 2 ? 'rose' : 'amber'}
-              />
-              <ProfileStatCard
-                icon={Calendar}
-                label="Renewals (90d)"
-                value={profile.renewals_next_90_days}
-                color="violet"
-              />
-            </div>
-          </div>
-          
-          {/* Lifetime Performance */}
-          <div className="px-6 py-4 border-b border-slate-100">
-            <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Lifetime Performance</h3>
-            <div className="grid grid-cols-2 gap-3">
-              <ProfileStatCard
-                icon={Briefcase}
-                label="Total Accounts Managed"
-                value={profile.total_accounts_managed}
-                color="slate"
-              />
-              <ProfileStatCard
-                icon={DollarSign}
-                label="Total ARR Managed"
-                value={formatCurrency(profile.total_arr_managed_lifetime)}
-                color="emerald"
-              />
-              <ProfileStatCard
-                icon={CheckCircle}
-                label="Renewals Won"
-                value={profile.accounts_successfully_renewed}
-                trend="up"
-                color="emerald"
-              />
-              <ProfileStatCard
-                icon={XCircle}
-                label="Accounts Churned"
-                value={profile.accounts_churned}
-                color={profile.accounts_churned > 3 ? 'rose' : 'slate'}
-              />
-              {profile.renewal_rate && (
-                <ProfileStatCard
-                  icon={Target}
-                  label="Renewal Rate"
-                  value={`${profile.renewal_rate.toFixed(0)}%`}
-                  trend={profile.renewal_rate > 90 ? 'up' : profile.renewal_rate < 80 ? 'down' : 'neutral'}
-                  color={profile.renewal_rate > 85 ? 'emerald' : 'amber'}
-                />
-              )}
-              {profile.avg_health_score && (
-                <ProfileStatCard
-                  icon={Award}
-                  label="Avg Health Score"
-                  value={profile.avg_health_score.toFixed(0)}
-                  subValue="/ 100"
-                  color={profile.avg_health_score > 75 ? 'emerald' : profile.avg_health_score > 60 ? 'amber' : 'rose'}
-                />
-              )}
-            </div>
-          </div>
-          
-          {/* Customer Satisfaction */}
-          <div className="px-6 py-4 border-b border-slate-100">
-            <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Customer Satisfaction</h3>
-            <div className="grid grid-cols-3 gap-3">
-              {profile.nps_score !== null && (
-                <ProfileStatCard
-                  icon={TrendingUp}
-                  label="NPS Score"
-                  value={profile.nps_score}
-                  color={profile.nps_score > 70 ? 'emerald' : profile.nps_score > 50 ? 'amber' : 'rose'}
-                />
-              )}
-              {profile.csat_score !== null && (
-                <ProfileStatCard
-                  icon={Star}
-                  label="CSAT"
-                  value={profile.csat_score.toFixed(1)}
-                  subValue="/ 5"
-                  color={profile.csat_score > 4.5 ? 'emerald' : profile.csat_score > 4 ? 'amber' : 'rose'}
-                />
-              )}
-              {profile.avg_response_time_hours !== null && (
-                <ProfileStatCard
-                  icon={MessageSquare}
-                  label="Avg Response"
-                  value={`${profile.avg_response_time_hours.toFixed(1)}h`}
-                  color={profile.avg_response_time_hours < 4 ? 'emerald' : 'amber'}
-                />
-              )}
-            </div>
-          </div>
-          
-          {/* Assignment History Timeline */}
-          <div className="px-6 py-4">
-            <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Assignment History</h3>
-            <div className="space-y-3">
-              {history.map((item) => (
-                <div 
-                  key={item.id}
-                  className={clsx(
-                    'flex gap-3 p-3 rounded-lg border transition-colors',
-                    item.action === 'removed' ? 'bg-rose-50/50 border-rose-100' :
-                    item.action === 'transferred_out' ? 'bg-amber-50/50 border-amber-100' :
-                    'bg-slate-50 border-slate-100 hover:bg-slate-100'
-                  )}
-                >
-                  <ActionIcon action={item.action} />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="font-medium text-slate-800 truncate">{item.account_name}</p>
-                      <span className="text-xs text-slate-500 whitespace-nowrap">
-                        {formatDate(item.action_date)}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2 mt-1">
-                      <span className={clsx(
-                        'text-xs font-medium px-1.5 py-0.5 rounded',
-                        item.action === 'assigned' ? 'bg-emerald-100 text-emerald-700' :
-                        item.action === 'removed' ? 'bg-rose-100 text-rose-700' :
-                        item.action === 'transferred_in' ? 'bg-blue-100 text-blue-700' :
-                        'bg-amber-100 text-amber-700'
-                      )}>
-                        {getActionLabel(item.action)}
-                      </span>
-                      <span className="text-xs text-slate-500">{item.account_type}</span>
-                      <span className="text-xs font-medium text-slate-600">{formatCurrency(item.arr)}</span>
-                    </div>
-                    {item.reason && (
-                      <p className="text-xs text-slate-500 mt-1">{item.reason}</p>
+          {activeTab === 'profile' ? (
+            /* ── Profile Tab ── */
+            profileLoading ? (
+              <div className="flex items-center justify-center py-16">
+                <Loader2 className="w-6 h-6 text-primary-500 animate-spin" />
+                <span className="ml-2 text-sm text-slate-500">Loading profile...</span>
+              </div>
+            ) : profileError ? (
+              <div className="px-6 py-8 text-center">
+                <p className="text-sm text-slate-500">Could not load profile data.</p>
+              </div>
+            ) : (
+              <>
+                <div className="px-6 py-4 border-b border-slate-100">
+                  <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Contact Information</h3>
+                  <div className="grid grid-cols-2 gap-3">
+                    {displayProfile?.email && (
+                      <div className="flex items-center gap-2 text-sm">
+                        <Mail className="w-4 h-4 text-slate-400 shrink-0" />
+                        <span className="text-slate-600 truncate">{displayProfile.email}</span>
+                      </div>
                     )}
-                    {(item.action === 'transferred_in' || item.action === 'transferred_out') && (
-                      <p className="text-xs text-slate-500 mt-1">
-                        {item.action === 'transferred_in' 
-                          ? `From ${item.previous_csm_name}` 
-                          : `To ${item.new_csm_name}`
-                        }
-                      </p>
+                    {displayProfile?.phone && (
+                      <div className="flex items-center gap-2 text-sm">
+                        <Phone className="w-4 h-4 text-slate-400 shrink-0" />
+                        <span className="text-slate-600">{displayProfile.phone}</span>
+                      </div>
                     )}
-                    {item.notes && (
-                      <p className="text-xs text-amber-600 mt-1 italic">{item.notes}</p>
+                    {displayProfile?.location && (
+                      <div className="flex items-center gap-2 text-sm">
+                        <MapPin className="w-4 h-4 text-slate-400 shrink-0" />
+                        <span className="text-slate-600">{displayProfile.location}</span>
+                      </div>
+                    )}
+                    {displayProfile?.reports_to && (
+                      <div className="flex items-center gap-2 text-sm">
+                        <Building className="w-4 h-4 text-slate-400 shrink-0" />
+                        <span className="text-slate-600">Reports to {displayProfile.reports_to}</span>
+                      </div>
+                    )}
+                    {displayProfile?.joined_date && (
+                      <div className="flex items-center gap-2 text-sm">
+                        <Calendar className="w-4 h-4 text-slate-400 shrink-0" />
+                        <span className="text-slate-600">Joined {formatDate(displayProfile.joined_date)}</span>
+                      </div>
+                    )}
+                    {displayProfile?.region && (
+                      <div className="flex items-center gap-2 text-sm">
+                        <MapPin className="w-4 h-4 text-slate-400 shrink-0" />
+                        <span className="text-slate-600">{displayProfile.region}</span>
+                      </div>
                     )}
                   </div>
                 </div>
-              ))}
-            </div>
-            
-            {/* Data availability notice */}
-            <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-              <p className="text-xs text-blue-700">
-                <strong>Note:</strong> This is sample data. Actual history requires Salesforce field history tracking 
-                on the CSM field or a custom assignment log table.
-              </p>
-            </div>
-          </div>
+
+                <div className="px-6 py-4 border-b border-slate-100">
+                  <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">
+                    {isDeparted ? 'Final Portfolio' : 'Current Portfolio'}
+                  </h3>
+                  <div className="grid grid-cols-2 gap-3">
+                    <ProfileStatCard icon={Users} label="Accounts" value={csm.account_count} color="blue" />
+                    <ProfileStatCard icon={DollarSign} label="ARR Managed" value={formatCurrency(csm.total_arr)} color="emerald" />
+                    <ProfileStatCard icon={AlertTriangle} label="Needs Attention" value={csm.at_risk_count} color={csm.at_risk_count > 2 ? 'rose' : 'amber'} />
+                    <ProfileStatCard icon={Calendar} label="Renewals (90d)" value={Math.floor(csm.account_count * 0.2)} color="violet" />
+                  </div>
+                </div>
+              </>
+            )
+          ) : (
+            /* ── Assignment History Tab ── */
+            historyLoading ? (
+              <div className="flex items-center justify-center py-16">
+                <Loader2 className="w-6 h-6 text-primary-500 animate-spin" />
+                <span className="ml-2 text-sm text-slate-500">Loading history...</span>
+              </div>
+            ) : (
+              <div className="p-4 space-y-4">
+                {/* Summary cards */}
+                {historySummary && (
+                  <div className="grid grid-cols-4 gap-3">
+                    <div className="bg-white rounded-xl border border-slate-200 p-3 hover:shadow-sm transition-shadow">
+                      <div className="flex items-center gap-2">
+                        <div className="w-7 h-7 rounded-lg flex items-center justify-center bg-blue-50 text-blue-600">
+                          <Users className="w-3.5 h-3.5" />
+                        </div>
+                        <div>
+                          <p className="text-[10px] text-slate-500">Current</p>
+                          <p className="text-base font-bold text-slate-800">{historySummary.current}</p>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="bg-white rounded-xl border border-slate-200 p-3 hover:shadow-sm transition-shadow">
+                      <div className="flex items-center gap-2">
+                        <div className="w-7 h-7 rounded-lg flex items-center justify-center bg-emerald-50 text-emerald-600">
+                          <Briefcase className="w-3.5 h-3.5" />
+                        </div>
+                        <div>
+                          <p className="text-[10px] text-slate-500">All-Time</p>
+                          <p className="text-base font-bold text-slate-800">{historySummary.totalManaged}</p>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="bg-white rounded-xl border border-slate-200 p-3 hover:shadow-sm transition-shadow">
+                      <div className="flex items-center gap-2">
+                        <div className="w-7 h-7 rounded-lg flex items-center justify-center bg-amber-50 text-amber-600">
+                          <Clock className="w-3.5 h-3.5" />
+                        </div>
+                        <div>
+                          <p className="text-[10px] text-slate-500">Avg Tenure</p>
+                          <p className="text-base font-bold text-slate-800">{formatDays(historySummary.avgDays)}</p>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="bg-white rounded-xl border border-slate-200 p-3 hover:shadow-sm transition-shadow">
+                      <div className="flex items-center gap-2">
+                        <div className="w-7 h-7 rounded-lg flex items-center justify-center bg-violet-50 text-violet-600">
+                          <ArrowRightLeft className="w-3.5 h-3.5" />
+                        </div>
+                        <div>
+                          <p className="text-[10px] text-slate-500">Transfers</p>
+                          <p className="text-base font-bold text-slate-800">
+                            <span className="text-emerald-600">{historySummary.received}</span>
+                            <span className="text-slate-400 mx-0.5">/</span>
+                            <span className="text-slate-500">{historySummary.handedOff}</span>
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Chart */}
+                {timeline.length >= 1 && (
+                  <AssignmentChart data={timeline} hoveredIndex={hoveredChartIdx} onHover={setHoveredChartIdx} />
+                )}
+
+                {/* Events table */}
+                <AssignmentEventsTable
+                  records={historyData || []}
+                  statusFilter={statusFilter}
+                  onStatusFilter={setStatusFilter}
+                  csmId={csm.id}
+                  csmName={csm.name}
+                />
+              </div>
+            )
+          )}
         </div>
-        
+
         {/* Footer */}
-        <div className="px-6 py-3 border-t border-slate-200 bg-slate-50 flex items-center justify-between">
-          <p className="text-xs text-slate-500">
-            Last updated: {new Date().toLocaleDateString()}
-          </p>
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 hover:bg-slate-200 rounded-lg transition-colors"
-          >
+        <div className="px-6 py-3 border-t border-slate-200 bg-slate-50 flex justify-end">
+          <button onClick={onClose}
+            className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 hover:bg-slate-200 rounded-lg transition-colors">
             Close
           </button>
         </div>

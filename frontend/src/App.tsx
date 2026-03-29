@@ -169,7 +169,7 @@ function App() {
 
         {activeNav === 'csm-management' && (
           <main className="flex-1 overflow-auto bg-slate-50">
-            <ManageCSM />
+            <ManageCSM accountTypeFilter={accountTypeFilter} />
           </main>
         )}
 
@@ -216,6 +216,7 @@ function App() {
           onAccountTypeChange={setAccountTypeFilter}
           accountTypeOptions={accountTypeOptions}
           pageTitle={PAGE_TITLES[activeNav]}
+          showAccountTypeFilter={activeNav === 'home' || activeNav === 'csm-management'}
         />
         {renderPage()}
       </div>

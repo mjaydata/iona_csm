@@ -4961,26 +4961,14 @@ class DatabricksService:
     def get_csm_types(self) -> dict[str, str]:
         """Return all CSM type tags as {csm_id: csm_type}.
 
-        Also auto-inserts any active CSMs that don't have a row yet
-        (defaulting to 'full-time') so the table stays in sync.
+        CSMs without a row default to 'full-time' on the frontend.
+        Rows are created on first tag change via update_csm_type.
         """
         try:
             with self.get_connection() as conn:
                 if conn is None:
                     return {}
                 cursor = conn.cursor()
-                cursor.execute(f"""
-                    MERGE INTO {self.CSM_TYPE_TAGS_TABLE} AS target
-                    USING (
-                        SELECT DISTINCT id AS csm_id
-                        FROM silver.silver_layer.dim_customers_csm
-                        WHERE status = 'active' AND id IS NOT NULL
-                    ) AS source
-                    ON target.csm_id = source.csm_id
-                    WHEN NOT MATCHED THEN
-                        INSERT (csm_id, csm_type, updated_at)
-                        VALUES (source.csm_id, 'full-time', current_timestamp())
-                """)
                 cursor.execute(f"""
                     SELECT csm_id, csm_type
                     FROM {self.CSM_TYPE_TAGS_TABLE}
@@ -4993,7 +4981,7 @@ class DatabricksService:
             return {}
 
     def update_csm_type(self, csm_id: str, csm_type: str) -> bool:
-        """Upsert a single CSM's type tag."""
+        """Upsert a single CSM's type tag (check-then-insert/update)."""
         try:
             with self.get_connection() as conn:
                 if conn is None:
@@ -5001,16 +4989,27 @@ class DatabricksService:
                 safe_id = self._sql_escape(csm_id)
                 safe_type = self._sql_escape(csm_type)
                 cursor = conn.cursor()
+
                 cursor.execute(f"""
-                    MERGE INTO {self.CSM_TYPE_TAGS_TABLE} AS target
-                    USING (SELECT '{safe_id}' AS csm_id, '{safe_type}' AS csm_type) AS source
-                    ON target.csm_id = source.csm_id
-                    WHEN MATCHED THEN
-                        UPDATE SET csm_type = source.csm_type, updated_at = current_timestamp()
-                    WHEN NOT MATCHED THEN
-                        INSERT (csm_id, csm_type, updated_at)
-                        VALUES (source.csm_id, source.csm_type, current_timestamp())
+                    SELECT 1 FROM {self.CSM_TYPE_TAGS_TABLE}
+                    WHERE csm_id = '{safe_id}'
                 """)
+                exists = cursor.fetchone() is not None
+
+                if exists:
+                    cursor.execute(f"""
+                        UPDATE {self.CSM_TYPE_TAGS_TABLE}
+                        SET csm_type = '{safe_type}',
+                            updated_at = CURRENT_TIMESTAMP()
+                        WHERE csm_id = '{safe_id}'
+                    """)
+                else:
+                    cursor.execute(f"""
+                        INSERT INTO {self.CSM_TYPE_TAGS_TABLE}
+                            (csm_id, csm_type, updated_at)
+                        VALUES ('{safe_id}', '{safe_type}', CURRENT_TIMESTAMP())
+                    """)
+
                 cursor.close()
                 return True
         except Exception as e:
@@ -5019,9 +5018,9 @@ class DatabricksService:
 
     # ==================== CSM Management Methods ====================
 
-    def get_csm_stats(self) -> CSMStats:
+    def get_csm_stats(self, account_type: Optional[str] = None) -> CSMStats:
         """Get CSM management dashboard statistics."""
-        logger.info("get_csm_stats called")
+        logger.info(f"get_csm_stats called, account_type={account_type}")
         FCT_TABLE = "silver.silver_layer.fct_contracts"
         with self.get_connection() as conn:
             if conn is None:
@@ -5030,7 +5029,10 @@ class DatabricksService:
 
             try:
                 cursor = conn.cursor()
-                # Get account counts from dim_customers, ARR from fct_contracts
+                acct_filter = ""
+                if account_type and account_type != "all":
+                    safe_type = self._sql_escape(account_type)
+                    acct_filter = f" AND c.account_type = '{safe_type}'"
                 cursor.execute(f"""
                     SELECT 
                         COUNT(DISTINCT u.id) as active_csms,
@@ -5038,7 +5040,7 @@ class DatabricksService:
                         SUM(CASE WHEN c.csm_c IS NULL OR c.csm_c = '' THEN 1 ELSE 0 END) as unassigned_accounts
                     FROM {DIM_CUSTOMERS_TABLE} c
                     LEFT JOIN {DIM_USERS_TABLE} u ON c.csm_c = u.id
-                    WHERE c._fivetran_deleted = false
+                    WHERE c._fivetran_deleted = false{acct_filter}
                 """)
                 row = cursor.fetchone()
 
@@ -5073,13 +5075,375 @@ class DatabricksService:
                 logger.error(f"Error fetching CSM stats: {e}")
                 return self._get_mock_csm_stats()
 
-    def get_csms(self, status: Optional[str] = None) -> CSMListResponse:
+    def get_csm_assignment_history(self, csm_id: str) -> list[dict]:
+        """Fetch assignment history for a CSM from the assignment history table.
+
+        Rows stored as status 'Current' are reconciled in Python with dim_customers: if
+        this CSM is not the active csm_c for that account_name, status is returned as
+        'Handed Off' (stale LEAD()-based flags in the history table). SQL uses two simple
+        queries so Databricks/connector dialect issues do not drop the whole result set.
+        """
+        HISTORY_TABLE = "silver.silver_layer.csm_assignment_history"
+        safe_id = self._sql_escape(csm_id)
+        with self.get_connection() as conn:
+            if conn is None:
+                return []
+            try:
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    SELECT
+                        account_name,
+                        csm_name,
+                        csm_id,
+                        assigned_from,
+                        assigned_until,
+                        days_held,
+                        handed_off_from,
+                        handed_off_from_id,
+                        changed_by,
+                        status
+                    FROM {HISTORY_TABLE}
+                    WHERE csm_id = '{safe_id}'
+                    ORDER BY assigned_from DESC
+                """)
+                rows = cursor.fetchall()
+                cursor.close()
+
+                live_names: Optional[set[str]] = None
+                try:
+                    cur2 = conn.cursor()
+                    cur2.execute(f"""
+                        SELECT DISTINCT account_name
+                        FROM {DIM_CUSTOMERS_TABLE}
+                        WHERE csm_c = '{safe_id}' AND _fivetran_deleted = false
+                    """)
+                    live_names = set()
+                    for r in cur2.fetchall():
+                        if r[0] is not None:
+                            live_names.add(str(r[0]).strip())
+                    cur2.close()
+                except Exception as e2:
+                    logger.warning(f"Live CSM account lookup skipped (reconciliation off): {e2}")
+
+                cols = [
+                    "account_name", "csm_name", "csm_id", "assigned_from",
+                    "assigned_until", "days_held", "handed_off_from",
+                    "handed_off_from_id", "changed_by", "status",
+                ]
+                results = []
+                for row in rows:
+                    item = {}
+                    for i, col in enumerate(cols):
+                        val = row[i]
+                        if val is not None and hasattr(val, 'isoformat'):
+                            val = val.isoformat()
+                        elif val is not None:
+                            val = str(val) if col not in ("days_held",) else val
+                        item[col] = val
+                    if item.get("days_held") is not None:
+                        try:
+                            item["days_held"] = int(item["days_held"])
+                        except (ValueError, TypeError):
+                            item["days_held"] = 0
+                    if live_names is not None:
+                        raw_status = item.get("status")
+                        st = str(raw_status).strip() if raw_status is not None else ""
+                        if st == "Current":
+                            acc = (item.get("account_name") or "")
+                            acc = acc.strip() if isinstance(acc, str) else str(acc).strip()
+                            if acc and acc not in live_names:
+                                item["status"] = "Handed Off"
+                    results.append(item)
+                return results
+            except Exception as e:
+                logger.error(f"Error fetching CSM assignment history: {e}")
+                return []
+
+    def get_distinct_csm_names_from_assignment_history(self) -> list[str]:
+        """Distinct CSM display names from csm_name and handed_off_from in assignment history."""
+        HISTORY_TABLE = "silver.silver_layer.csm_assignment_history"
+        with self.get_connection() as conn:
+            if conn is None:
+                return []
+            try:
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    SELECT DISTINCT TRIM(n) AS n FROM (
+                        SELECT csm_name AS n FROM {HISTORY_TABLE}
+                        WHERE csm_name IS NOT NULL AND TRIM(csm_name) != ''
+                        UNION ALL
+                        SELECT handed_off_from AS n FROM {HISTORY_TABLE}
+                        WHERE handed_off_from IS NOT NULL AND TRIM(handed_off_from) != ''
+                    ) q
+                    WHERE TRIM(n) != ''
+                    ORDER BY 1
+                """)
+                rows = cursor.fetchall()
+                cursor.close()
+                return [str(r[0]).strip() for r in rows if r and r[0]]
+            except Exception as e:
+                logger.error(f"get_distinct_csm_names_from_assignment_history: {e}", exc_info=True)
+                return []
+
+    @staticmethod
+    def _parse_iso_to_sql_timestamp(iso: str) -> Optional[str]:
+        """Return 'YYYY-MM-DD HH:mm:ss' for SQL TIMESTAMP literal, or None."""
+        if not iso or str(iso).strip() in ("", "-", "null", "None"):
+            return None
+        try:
+            s = str(iso).strip().replace("Z", "+00:00")
+            d = datetime.fromisoformat(s)
+            return d.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return None
+
+    def delete_csm_assignment_history_record(
+        self,
+        csm_id: str,
+        account_name: str,
+        assigned_from: str,
+    ) -> bool:
+        """Delete one row from csm_assignment_history by natural key."""
+        HISTORY_TABLE = "silver.silver_layer.csm_assignment_history"
+        safe_csm = self._sql_escape(csm_id)
+        safe_acc = self._sql_escape(account_name)
+        ts = self._parse_iso_to_sql_timestamp(assigned_from)
+        if not ts:
+            return False
+        safe_ts = self._sql_escape(ts)
+        try:
+            with self.get_connection() as conn:
+                if conn is None:
+                    return False
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    DELETE FROM {HISTORY_TABLE}
+                    WHERE csm_id = '{safe_csm}'
+                      AND account_name = '{safe_acc}'
+                      AND assigned_from = TIMESTAMP('{safe_ts}')
+                """)
+                cursor.close()
+                return True
+        except Exception as e:
+            logger.error(f"delete_csm_assignment_history_record: {e}", exc_info=True)
+            return False
+
+    def update_csm_assignment_history_record(
+        self,
+        csm_id: str,
+        account_name: str,
+        assigned_from_key: str,
+        handed_off_from: Optional[str],
+        handed_off_from_id: Optional[str],
+        assigned_from_new: str,
+        assigned_until: Optional[str],
+        status: str,
+    ) -> bool:
+        """Update one assignment history row. assigned_until empty -> NULL (open)."""
+        HISTORY_TABLE = "silver.silver_layer.csm_assignment_history"
+        safe_csm = self._sql_escape(csm_id)
+        safe_acc = self._sql_escape(account_name)
+        safe_status = self._sql_escape(status)
+
+        key_ts = self._parse_iso_to_sql_timestamp(assigned_from_key)
+        new_from_ts = self._parse_iso_to_sql_timestamp(assigned_from_new)
+        if not key_ts or not new_from_ts:
+            return False
+        safe_key = self._sql_escape(key_ts)
+        safe_new_from = self._sql_escape(new_from_ts)
+
+        until_raw = self._parse_iso_to_sql_timestamp(assigned_until) if assigned_until else None
+        until_sql = f"TIMESTAMP('{self._sql_escape(until_raw)}')" if until_raw else "NULL"
+
+        ho_sql = f"'{self._sql_escape(handed_off_from)}'" if handed_off_from else "NULL"
+        hoid_sql = f"'{self._sql_escape(handed_off_from_id)}'" if handed_off_from_id else "NULL"
+
+        try:
+            s_dt = datetime.fromisoformat(str(assigned_from_new).replace("Z", "+00:00"))
+            if until_raw:
+                e_dt = datetime.fromisoformat(str(assigned_until).replace("Z", "+00:00"))
+                days_val = max(0, (e_dt - s_dt).days)
+            else:
+                days_val = max(0, (date.today() - s_dt.date()).days)
+            days_sql = str(days_val)
+        except Exception:
+            days_sql = "NULL"
+
+        try:
+            with self.get_connection() as conn:
+                if conn is None:
+                    return False
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    UPDATE {HISTORY_TABLE}
+                    SET
+                        assigned_from = TIMESTAMP('{safe_new_from}'),
+                        assigned_until = {until_sql},
+                        days_held = {days_sql},
+                        handed_off_from = {ho_sql},
+                        handed_off_from_id = {hoid_sql},
+                        status = '{safe_status}'
+                    WHERE csm_id = '{safe_csm}'
+                      AND account_name = '{safe_acc}'
+                      AND assigned_from = TIMESTAMP('{safe_key}')
+                """)
+                cursor.close()
+                return True
+        except Exception as e:
+            logger.error(f"update_csm_assignment_history_record: {e}", exc_info=True)
+            return False
+
+    def insert_csm_assignment_history_record(
+        self,
+        csm_id: str,
+        csm_name: str,
+        account_name: str,
+        assigned_from: str,
+        assigned_until: Optional[str],
+        handed_off_from: Optional[str],
+        handed_off_from_id: Optional[str],
+        status: str,
+    ) -> bool:
+        """Insert one row into csm_assignment_history."""
+        HISTORY_TABLE = "silver.silver_layer.csm_assignment_history"
+        safe_csm = self._sql_escape(csm_id)
+        safe_csm_name = self._sql_escape(csm_name)
+        safe_acc = self._sql_escape(account_name)
+        safe_status = self._sql_escape(status)
+
+        new_from_ts = self._parse_iso_to_sql_timestamp(assigned_from)
+        if not new_from_ts:
+            return False
+        safe_new_from = self._sql_escape(new_from_ts)
+
+        until_raw = self._parse_iso_to_sql_timestamp(assigned_until) if assigned_until else None
+        until_sql = f"TIMESTAMP('{self._sql_escape(until_raw)}')" if until_raw else "NULL"
+
+        ho_sql = f"'{self._sql_escape(handed_off_from)}'" if handed_off_from else "NULL"
+        hoid_sql = f"'{self._sql_escape(handed_off_from_id)}'" if handed_off_from_id else "NULL"
+
+        try:
+            s_dt = datetime.fromisoformat(str(assigned_from).replace("Z", "+00:00"))
+            if until_raw:
+                e_dt = datetime.fromisoformat(str(assigned_until).replace("Z", "+00:00"))
+                days_val = max(0, (e_dt - s_dt).days)
+            else:
+                days_val = max(0, (date.today() - s_dt.date()).days)
+            days_sql = str(days_val)
+        except Exception:
+            days_sql = "0"
+
+        try:
+            with self.get_connection() as conn:
+                if conn is None:
+                    return False
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    INSERT INTO {HISTORY_TABLE} (
+                        account_name, csm_name, csm_id, assigned_from, assigned_until,
+                        days_held, handed_off_from, handed_off_from_id, changed_by, status
+                    ) VALUES (
+                        '{safe_acc}',
+                        '{safe_csm_name}',
+                        '{safe_csm}',
+                        TIMESTAMP('{safe_new_from}'),
+                        {until_sql},
+                        {days_sql},
+                        {ho_sql},
+                        {hoid_sql},
+                        'manual',
+                        '{safe_status}'
+                    )
+                """)
+                cursor.close()
+                return True
+        except Exception as e:
+            logger.error(f"insert_csm_assignment_history_record: {e}", exc_info=True)
+            return False
+
+    def get_csm_profile(self, csm_id: str) -> Optional[dict]:
+        """Fetch CSM profile from Salesforce user table."""
+        SF_USER_TABLE = "workspace.salesforce.user"
+        safe_id = self._sql_escape(csm_id)
+        with self.get_connection() as conn:
+            if conn is None:
+                return None
+            try:
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    SELECT
+                        u.id,
+                        u.name,
+                        u.email,
+                        sf.phone,
+                        sf.mobile_phone,
+                        sf.title,
+                        sf.department,
+                        sf.division,
+                        sf.city,
+                        sf.state,
+                        sf.country,
+                        sf.time_zone_sid_key,
+                        sf.region_c,
+                        sf.is_active,
+                        sf.created_date,
+                        sf.last_login_date,
+                        sf.full_photo_url,
+                        sf.medium_photo_url,
+                        sf.manager_id,
+                        mgr.name AS reports_to
+                    FROM {DIM_USERS_TABLE} u
+                    LEFT JOIN {SF_USER_TABLE} sf ON sf.id = u.id
+                    LEFT JOIN {SF_USER_TABLE} mgr ON sf.manager_id = mgr.id
+                    WHERE u.id = '{safe_id}'
+                """)
+                row = cursor.fetchone()
+                cursor.close()
+                if not row:
+                    return None
+
+                cols = [
+                    "id", "name", "email", "phone", "mobile_phone",
+                    "title", "department", "division", "city", "state",
+                    "country", "timezone", "region", "is_active",
+                    "joined_date", "last_login_date", "full_photo_url",
+                    "medium_photo_url", "manager_id", "reports_to",
+                ]
+                profile = {cols[i]: row[i] for i in range(len(cols))}
+
+                location_parts = [p for p in [profile.get("city"), profile.get("state"), profile.get("country")] if p]
+                profile["location"] = ", ".join(location_parts) if location_parts else None
+
+                if profile.get("joined_date"):
+                    from datetime import datetime, date as date_type
+                    try:
+                        jd = profile["joined_date"]
+                        if isinstance(jd, str):
+                            jd = datetime.fromisoformat(jd.replace("Z", "+00:00"))
+                        if isinstance(jd, (datetime, date_type)):
+                            today = datetime.now()
+                            delta = today - (jd if isinstance(jd, datetime) else datetime.combine(jd, datetime.min.time()))
+                            profile["tenure_months"] = max(int(delta.days / 30.44), 0)
+                        else:
+                            profile["tenure_months"] = None
+                    except Exception:
+                        profile["tenure_months"] = None
+                else:
+                    profile["tenure_months"] = None
+
+                return profile
+            except Exception as e:
+                logger.error(f"Error fetching CSM profile: {e}")
+                return None
+
+    def get_csms(self, status: Optional[str] = None, account_type: Optional[str] = None) -> CSMListResponse:
         """Get list of all CSMs with their metrics.
         
         Args:
             status: Filter by CSM status (active, inactive, departed). None returns all.
+            account_type: Filter accounts by type (Customer, Prospect, etc.). None returns all.
         """
-        logger.info(f"get_csms called with status={status}")
+        logger.info(f"get_csms called with status={status}, account_type={account_type}")
         FCT_TABLE = "silver.silver_layer.fct_contracts"
         with self.get_connection() as conn:
             if conn is None:
@@ -5088,7 +5452,10 @@ class DatabricksService:
 
             try:
                 cursor = conn.cursor()
-                # Get CSM metrics with ARR and at-risk counts from fct_contracts
+                acct_filter = ""
+                if account_type and account_type != "all":
+                    safe_type = self._sql_escape(account_type)
+                    acct_filter = f" AND c.account_type = '{safe_type}'"
                 cursor.execute(f"""
                     SELECT 
                         u.id,
@@ -5103,7 +5470,7 @@ class DatabricksService:
                             THEN c.account_id 
                         END) as at_risk_count
                     FROM {DIM_USERS_TABLE} u
-                    INNER JOIN {DIM_CUSTOMERS_TABLE} c ON c.csm_c = u.id AND c._fivetran_deleted = false
+                    INNER JOIN {DIM_CUSTOMERS_TABLE} c ON c.csm_c = u.id AND c._fivetran_deleted = false{acct_filter}
                     LEFT JOIN {FCT_TABLE} f ON c.account_id = f.account_id 
                         AND f.RENEWAL_NOT_YET_CONTRACTED = 'Y'
                         AND f.revenue_type NOT IN ('Services', 'Perpetual')
@@ -5143,9 +5510,10 @@ class DatabricksService:
         csm_id: Optional[str] = None,
         unassigned_only: bool = False,
         search: Optional[str] = None,
+        account_type: Optional[str] = None,
     ) -> Tuple[List[AccountWithCSM], int]:
         """Get accounts with their CSM assignment info."""
-        logger.info(f"get_accounts_with_csm called: page={page}, csm_id={csm_id}, unassigned_only={unassigned_only}")
+        logger.info(f"get_accounts_with_csm called: page={page}, csm_id={csm_id}, unassigned_only={unassigned_only}, account_type={account_type}")
         with self.get_connection() as conn:
             if conn is None:
                 logger.warning("Connection is None, returning mock accounts with CSM")
@@ -5197,6 +5565,10 @@ class DatabricksService:
                 params = []
 
                 # Apply filters
+                if account_type and account_type != "all":
+                    base_query += " AND c.account_type = ?"
+                    params.append(account_type)
+
                 if csm_id:
                     base_query += " AND c.csm_c = ?"
                     params.append(csm_id)

@@ -15,6 +15,7 @@ interface HeaderProps {
   onAccountTypeChange?: (value: string) => void
   accountTypeOptions?: AccountTypeOption[]
   pageTitle?: string
+  showAccountTypeFilter?: boolean
 }
 
 export function Header({ 
@@ -24,7 +25,8 @@ export function Header({
   accountTypeFilter,
   onAccountTypeChange,
   accountTypeOptions = [],
-  pageTitle = 'Portfolio Summary'
+  pageTitle = 'Portfolio Summary',
+  showAccountTypeFilter,
 }: HeaderProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [dropdownOpen, setDropdownOpen] = useState(false)
@@ -96,7 +98,7 @@ export function Header({
 
       {/* Right side - Account Type Filter (Custom Dropdown) */}
       <div className="flex items-center gap-4">
-        {showSearch && accountTypeOptions.length > 0 && onAccountTypeChange && (
+        {(showAccountTypeFilter ?? showSearch) && accountTypeOptions.length > 0 && onAccountTypeChange && (
           <div className="flex items-center gap-3 border-l border-slate-200 pl-4">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Viewing</span>
             <div className="relative" ref={dropdownRef}>

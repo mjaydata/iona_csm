@@ -209,13 +209,18 @@ export async function createTask(task: TaskCreate): Promise<Task> {
 }
 
 // CSM Management
-export async function getCSMStats(): Promise<CSMStats> {
-  const { data } = await api.get<CSMStats>('/csm/stats')
+export interface GetCSMStatsParams {
+  account_type?: string
+}
+
+export async function getCSMStats(params: GetCSMStatsParams = {}): Promise<CSMStats> {
+  const { data } = await api.get<CSMStats>('/csm/stats', { params })
   return data
 }
 
 export interface GetCSMsParams {
   status?: string  // active, inactive, departed
+  account_type?: string
 }
 
 export async function getCSMs(params: GetCSMsParams = {}): Promise<CSMListResponse> {
@@ -229,11 +234,103 @@ export interface GetAccountsWithCSMParams {
   csm_id?: string
   unassigned_only?: boolean
   search?: string
+  account_type?: string
 }
 
 export async function getAccountsWithCSM(params: GetAccountsWithCSMParams = {}): Promise<AccountWithCSMListResponse> {
   const { data } = await api.get<AccountWithCSMListResponse>('/csm/accounts', { params })
   return data
+}
+
+export interface CSMProfileData {
+  id: string
+  name: string
+  email: string | null
+  phone: string | null
+  mobile_phone: string | null
+  title: string | null
+  department: string | null
+  division: string | null
+  city: string | null
+  state: string | null
+  country: string | null
+  timezone: string | null
+  region: string | null
+  is_active: boolean | null
+  joined_date: string | null
+  last_login_date: string | null
+  full_photo_url: string | null
+  medium_photo_url: string | null
+  manager_id: string | null
+  reports_to: string | null
+  location: string | null
+  tenure_months: number | null
+}
+
+export async function getCSMProfile(csmId: string): Promise<CSMProfileData> {
+  const { data } = await api.get<CSMProfileData>(`/csm/profile/${csmId}`)
+  return data
+}
+
+export interface CSMAssignmentRecord {
+  account_name: string
+  csm_name: string
+  csm_id: string
+  assigned_from: string | null
+  assigned_until: string | null
+  days_held: number | null
+  handed_off_from: string | null
+  handed_off_from_id: string | null
+  changed_by: string | null
+  status: 'Current' | 'Handed Off' | string
+}
+
+export async function getCSMAssignmentHistory(csmId: string): Promise<CSMAssignmentRecord[]> {
+  const { data } = await api.get<CSMAssignmentRecord[]>(`/csm/assignment-history/${csmId}`)
+  return data
+}
+
+export interface CSMAssignmentHistoryUpdatePayload {
+  csm_id: string
+  account_name: string
+  assigned_from_key: string
+  handed_off_from?: string | null
+  handed_off_from_id?: string | null
+  assigned_from: string
+  assigned_until?: string | null
+  status: string
+}
+
+export async function updateCSMAssignmentHistory(body: CSMAssignmentHistoryUpdatePayload): Promise<void> {
+  await api.put('/csm/assignment-history', body)
+}
+
+export async function deleteCSMAssignmentHistory(body: {
+  csm_id: string
+  account_name: string
+  assigned_from: string
+}): Promise<void> {
+  await api.post('/csm/assignment-history/delete', body)
+}
+
+export async function getDistinctCsmNamesFromHistory(): Promise<string[]> {
+  const { data } = await api.get<string[]>('/csm/assignment-history/distinct-csm-names')
+  return data
+}
+
+export interface CSMAssignmentHistoryCreatePayload {
+  csm_id: string
+  csm_name: string
+  account_name: string
+  assigned_from: string
+  assigned_until?: string | null
+  handed_off_from?: string | null
+  handed_off_from_id?: string | null
+  status: string
+}
+
+export async function createCSMAssignmentHistory(body: CSMAssignmentHistoryCreatePayload): Promise<void> {
+  await api.post('/csm/assignment-history/create', body)
 }
 
 // ARR Analysis

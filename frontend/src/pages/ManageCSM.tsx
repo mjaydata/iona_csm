@@ -13,6 +13,7 @@ import {
   Clock,
   UserX,
   User,
+  Info,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useCSMStats, useCSMs, useAccountsWithCSM } from '../hooks/useCSM'
@@ -329,28 +330,43 @@ function UnassignedCard({
   isActive?: boolean
   onClick?: () => void
 }) {
+  const count = typeof value === 'number' ? value : 0
+  const hasUnassigned = count > 0
   return (
     <div
       className={clsx(
-        'bg-white rounded-xl shadow-sm border p-5 transition-all cursor-pointer hover:shadow-md',
+        'bg-white rounded-xl shadow-sm border p-5 transition-all',
+        hasUnassigned && 'cursor-pointer hover:shadow-md',
         isActive
           ? 'border-amber-400 ring-2 ring-amber-100 bg-amber-50/30'
-          : 'border-gray-200 hover:border-gray-300'
+          : hasUnassigned
+            ? 'border-amber-200 hover:border-amber-300 bg-amber-50/20'
+            : 'border-emerald-200 bg-emerald-50/20'
       )}
-      onClick={onClick}
+      onClick={hasUnassigned ? onClick : undefined}
     >
       <div className="flex items-center justify-between mb-3">
         <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Unassigned Accounts</p>
-        <div className="w-9 h-9 rounded-xl flex items-center justify-center bg-amber-100">
-          <UserPlus className="w-4 h-4 text-amber-600" />
+        <div className={clsx(
+          'w-9 h-9 rounded-xl flex items-center justify-center',
+          hasUnassigned ? 'bg-amber-100' : 'bg-emerald-100'
+        )}>
+          <UserPlus className={clsx('w-4 h-4', hasUnassigned ? 'text-amber-600' : 'text-emerald-600')} />
         </div>
       </div>
       {isLoading ? (
         <div className="h-8 w-16 bg-slate-200 rounded animate-pulse" />
       ) : (
-        <p className="text-3xl font-bold text-slate-800">{value}</p>
+        <p className={clsx(
+          'text-3xl font-bold',
+          hasUnassigned ? 'text-amber-700' : 'text-emerald-700'
+        )}>{value}</p>
       )}
-      <p className="text-[11px] text-slate-400 mt-1">Click to view</p>
+      {hasUnassigned ? (
+        <p className="text-[11px] text-amber-500 mt-1">Click to view</p>
+      ) : (
+        <p className="text-[11px] text-emerald-500 mt-1">All accounts assigned</p>
+      )}
     </div>
   )
 }
@@ -464,6 +480,9 @@ function CSMRow({
             {formatCurrency(csm.total_arr)}
           </span>
         </td>
+        <td className="py-3 px-4 text-right">
+          <span className="text-sm text-slate-400">—</span>
+        </td>
         <td className="py-3 px-4 text-center">
           {csm.at_risk_count > 0 ? (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-rose-100 text-rose-700 rounded-full text-xs font-medium">
@@ -509,7 +528,7 @@ function CSMRow({
       {/* Expanded Accounts */}
       {isExpanded && (
         <tr>
-          <td colSpan={8} className="p-0">
+          <td colSpan={9} className="p-0">
             <div className={clsx(
               'border-t',
               isDeparted ? 'bg-rose-50/30' : 'bg-gradient-to-b from-slate-50/80 to-white'
@@ -669,7 +688,7 @@ function UnassignedAccountsTable({
 }
 
 // Main component
-export function ManageCSM() {
+export function ManageCSM({ accountTypeFilter = 'Customer' }: { accountTypeFilter?: string }) {
   const [expandedCSMs, setExpandedCSMs] = useState<Set<string>>(new Set())
   const [showUnassignedOnly, setShowUnassignedOnly] = useState(false)
   const [csmStatusFilter, setCsmStatusFilter] = useState<string>('')
@@ -700,13 +719,16 @@ export function ManageCSM() {
   const [csmDropdownOpen, setCsmDropdownOpen] = useState(false)
   const [csmSearch, setCsmSearch] = useState('')
 
-  // Queries
-  const { data: stats, isLoading: statsLoading } = useCSMStats()
-  const { data: csmsData, isLoading: csmsLoading } = useCSMs({ status: csmStatusFilter || undefined })
-  const { data: allCSMsData } = useCSMs({ status: 'active' })
+  const acctParam = accountTypeFilter !== 'all' ? accountTypeFilter : undefined
+
+  // Queries — all scoped by account type
+  const { data: stats, isLoading: statsLoading } = useCSMStats({ account_type: acctParam })
+  const { data: csmsData, isLoading: csmsLoading } = useCSMs({ status: csmStatusFilter || undefined, account_type: acctParam })
+  const { data: allCSMsData } = useCSMs({ status: 'active', account_type: acctParam })
   const { data: unassignedData, isLoading: unassignedLoading } = useAccountsWithCSM({
     unassigned_only: true,
     page_size: 100,
+    account_type: acctParam,
   })
 
   // Full CSM name list for the filter dropdown (independent of status filter)
@@ -1003,8 +1025,23 @@ export function ManageCSM() {
                       <th className="text-center py-3 px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Type</th>
                       <th className="text-center py-3 px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Accounts</th>
                       <th className="text-right py-3 px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Total ARR</th>
+                      <th className="text-right py-3 px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Sub Tokens</th>
                       <th className="text-center py-3 px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Needs Attention</th>
-                      <th className="text-center py-3 px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Workload</th>
+                      <th className="text-center py-3 px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider relative group">
+                        <span className="inline-flex items-center gap-1">
+                          Workload
+                          <Info className="w-3.5 h-3.5 text-slate-400 cursor-help" />
+                        </span>
+                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 p-3 bg-slate-800 text-white text-[11px] leading-relaxed rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 normal-case tracking-normal font-normal text-left">
+                          <p className="font-semibold mb-1">FTE-Weighted Workload</p>
+                          <p>Fair share is calculated by dividing total accounts by the sum of FTE weights across all active CSMs.</p>
+                          <p className="mt-1"><span className="font-medium">Full-Time (FT):</span> 1.0× weight</p>
+                          <p><span className="font-medium">Part-Time (PT):</span> 0.5× weight</p>
+                          <p><span className="font-medium">Backfill (BF):</span> 0.5× weight</p>
+                          <p className="mt-1 text-slate-300">100% = carrying their expected fair share based on type.</p>
+                          <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-px border-4 border-transparent border-t-slate-800" />
+                        </div>
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
