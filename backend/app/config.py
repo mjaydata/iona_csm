@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     app_name: str = "CSM Dashboard"
     debug: bool = False
 
+    # CSM feedback drill-out (optional). E.g. https://yourorg.freshdesk.com — ticket link: {base}/a/tickets/{id}
+    freshdesk_portal_base: str = ""
+    # E.g. https://example.com/path/{response_id} for SurveyMonkey response deep links
+    survey_monkey_response_url_template: str = ""
+
     @property
     def is_development(self) -> bool:
         return self.environment == "development"

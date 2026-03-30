@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from ..models.schemas import (
     AccountWithCSMListResponse,
+    CSMSupportTicketsResponse,
     CSMListResponse,
     CSMStats,
 )
@@ -54,6 +55,27 @@ async def get_csm_profile(
     if not profile:
         raise HTTPException(status_code=404, detail="CSM not found")
     return profile
+
+
+@router.get("/feedback/{csm_id}")
+async def get_csm_feedback(
+    csm_id: str,
+    db: DatabricksService = Depends(get_databricks_service),
+):
+    """Aggregated NPS/CSAT (SurveyMonkey + Freshdesk) for this CSM's accounts."""
+    return db.get_csm_feedback_satisfaction(csm_id)
+
+
+@router.get("/support-tickets/{csm_id}", response_model=CSMSupportTicketsResponse)
+async def get_csm_support_tickets(
+    csm_id: str,
+    limit: int = Query(40, ge=1, le=100),
+    account_type: Optional[str] = Query(None, description="Filter by dim_customers.account_type; omit for all"),
+    db: DatabricksService = Depends(get_databricks_service),
+):
+    """Recent Freshdesk tickets for accounts where this user is the assigned CSM (csm_c)."""
+    tickets = db.get_csm_support_tickets_recent(csm_id, limit=limit, account_type=account_type)
+    return CSMSupportTicketsResponse(tickets=tickets)
 
 
 @router.get("/assignment-history/distinct-csm-names")

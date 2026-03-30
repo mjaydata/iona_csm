@@ -1,5 +1,5 @@
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getAccounts, getAccountFullDetail, getMetricsSummary, getAccountTypeCounts, getCustomerGrowth, getCustomerGrowthBreakdown, updateAccountStatus, createTask, getARRAnalysis, type GetAccountsParams, type GetARRAnalysisParams } from '../services/api'
+import { getAccounts, getAccountFullDetail, getConfluenceImplementation, getMetricsSummary, getAccountTypeCounts, getCustomerGrowth, getCustomerGrowthBreakdown, updateAccountStatus, createTask, getARRAnalysis, type GetAccountsParams, type GetARRAnalysisParams } from '../services/api'
 import type { TaskCreate } from '../types'
 
 export function useMetrics(accountType?: string, renewalPeriod?: number) {
@@ -30,6 +30,15 @@ export function useAccountFullDetail(accountId: string | null) {
     queryKey: ['account-detail', accountId],
     queryFn: () => getAccountFullDetail(accountId!),
     enabled: !!accountId,
+  })
+}
+
+export function useConfluenceImplementation(accountId: string | null, enabled = true) {
+  return useQuery({
+    queryKey: ['confluence-implementation', accountId],
+    queryFn: () => getConfluenceImplementation(accountId!),
+    enabled: !!accountId && enabled,
+    staleTime: 5 * 60 * 1000,
   })
 }
 

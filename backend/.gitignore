@@ -35,5 +35,4 @@ ENV/
 *.swp
 *.swo
 
-# Static files (built from frontend)
-static/
+# Static files: built from ../frontend (npm run build); synced by `databricks bundle deploy` — do not gitignore

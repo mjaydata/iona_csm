@@ -27,4 +27,4 @@ Thumbs.db
 # Build artifacts
 dist/
 build/
-backend/static/
+# backend/static/ is the Vite build copied for Databricks Apps — must not be gitignored or bundle sync skips the UI

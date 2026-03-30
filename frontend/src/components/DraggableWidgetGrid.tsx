@@ -19,7 +19,7 @@ import {
 } from '@dnd-kit/sortable'
 import { Settings, Plus, RotateCcw } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
-import type { WidgetType, AccountFullDetail, WidgetSize, WidgetLayout } from '../types'
+import type { WidgetType, AccountFullDetail, WidgetSize, WidgetLayout, WidgetHeightSize } from '../types'
 
 // Widgets
 import {
@@ -28,6 +28,7 @@ import {
   UsageTrendWidget,
   WhitespaceWidget,
   ContractWidget,
+  ConfluenceImplementationWidget,
   MeetingBriefWidget,
   ChangeDetectionWidget,
   HumanNotesWidget,
@@ -56,6 +57,7 @@ import {
   BarChart3,
   Bell,
   Radio,
+  BookOpen,
 } from 'lucide-react'
 
 interface WidgetDefinition {
@@ -64,6 +66,7 @@ interface WidgetDefinition {
   title: string
   icon: React.ReactNode
   defaultSize: WidgetSize
+  defaultHeightSize?: WidgetHeightSize
   defaultVisible?: boolean  // If false, hidden by default
   underDevelopment?: boolean  // If true, shows "Under Development" badge
 }
@@ -73,6 +76,15 @@ interface WidgetDefinition {
 // Widgets under development (mock data): all others
 const WIDGET_DEFINITIONS: WidgetDefinition[] = [
   { id: 'contract', type: 'contract', title: 'Contract & Renewal', icon: <FileText className="w-4 h-4" />, defaultSize: 1, defaultVisible: true },
+  {
+    id: 'implementation',
+    type: 'implementation',
+    title: 'Implementation context',
+    icon: <BookOpen className="w-4 h-4" />,
+    defaultSize: 2,
+    defaultHeightSize: 3,
+    defaultVisible: true,
+  },
   { id: 'support', type: 'support', title: 'Support Risk', icon: <Headphones className="w-4 h-4" />, defaultSize: 1, defaultVisible: true },
   { id: 'usage', type: 'usage', title: 'Product Usage — Pendo', icon: <TrendingUp className="w-4 h-4" />, defaultSize: 1, defaultVisible: true },
   { id: 'health', type: 'health', title: 'Health Score', icon: <Activity className="w-4 h-4" />, defaultSize: 1, defaultVisible: false, underDevelopment: true },
@@ -100,7 +112,7 @@ export function getDefaultLayout(): WidgetLayout[] {
     id: w.id,
     order: index,
     size: w.defaultSize,
-    heightSize: 2 as const,
+    heightSize: (w.defaultHeightSize ?? 2) as WidgetHeightSize,
     collapsed: false,
     visible: w.defaultVisible !== false,  // Default to true unless explicitly set to false
   }))
@@ -264,6 +276,10 @@ export function DraggableWidgetGrid({
         return <WhitespaceWidget data={data?.whitespace} {...commonProps} />
       case 'contract':
         return <ContractWidget data={data?.contract} {...commonProps} />
+      case 'implementation':
+        return (
+          <ConfluenceImplementationWidget accountId={data?.account.id} {...commonProps} />
+        )
       case 'brief':
         return <MeetingBriefWidget data={data?.meeting_brief} {...commonProps} />
       case 'changes':

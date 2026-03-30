@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useRef } from 'react'
+import { useState, useMemo, useCallback, useRef, Fragment } from 'react'
 import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { 
@@ -20,6 +20,8 @@ import {
   Pencil,
   Trash2,
   Plus,
+  BarChart2,
+  ExternalLink,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { CSM } from '../types'
@@ -31,7 +33,7 @@ import {
   getDistinctCsmNamesFromHistory,
   getCSMs,
 } from '../services/api'
-import { useCSMProfile, useCSMAssignmentHistory } from '../hooks/useCSM'
+import { useCSMProfile, useCSMAssignmentHistory, useCSMFeedback } from '../hooks/useCSM'
 
 function toDatetimeLocalValue(iso: string | null | undefined): string {
   if (!iso || iso === '-') return ''
@@ -817,7 +819,7 @@ function AssignmentEventsTable({ records, statusFilter, onStatusFilter, csmId, c
 }
 
 // ── Main Panel ──
-type PanelTab = 'profile' | 'history'
+type PanelTab = 'profile' | 'history' | 'feedback'
 
 interface CSMProfilePanelProps {
   csm: CSM
@@ -832,6 +834,10 @@ export function CSMProfilePanel({ csm, isOpen, onClose }: CSMProfilePanelProps) 
 
   const { data: profile, isLoading: profileLoading, isError: profileError } = useCSMProfile(isOpen ? csm.id : null)
   const { data: historyData, isLoading: historyLoading } = useCSMAssignmentHistory(isOpen ? csm.id : null)
+  const { data: feedbackData, isLoading: feedbackLoading, isError: feedbackError } = useCSMFeedback(
+    isOpen ? csm.id : null,
+    isOpen && activeTab === 'feedback',
+  )
 
   const isDeparted = csm.status === 'departed'
   const isInactive = csm.status === 'inactive'
@@ -943,6 +949,22 @@ export function CSMProfilePanel({ csm, isOpen, onClose }: CSMProfilePanelProps) 
               </span>
             )}
           </button>
+          <button
+            onClick={() => setActiveTab('feedback')}
+            className={clsx(
+              'flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px',
+              activeTab === 'feedback'
+                ? 'border-primary-500 text-primary-600'
+                : 'border-transparent text-slate-500 hover:text-slate-700'
+            )}>
+            <BarChart2 className="w-3.5 h-3.5" />
+            NPS &amp; satisfaction
+            {feedbackData && feedbackData.summary.total > 0 && (
+              <span className="ml-1 px-1.5 py-0.5 bg-slate-100 text-slate-500 text-[10px] font-bold rounded-full">
+                {feedbackData.summary.total}
+              </span>
+            )}
+          </button>
         </div>
 
         {/* Content */}
@@ -1015,7 +1037,7 @@ export function CSMProfilePanel({ csm, isOpen, onClose }: CSMProfilePanelProps) 
                 </div>
               </>
             )
-          ) : (
+          ) : activeTab === 'history' ? (
             /* ── Assignment History Tab ── */
             historyLoading ? (
               <div className="flex items-center justify-center py-16">
@@ -1091,6 +1113,235 @@ export function CSMProfilePanel({ csm, isOpen, onClose }: CSMProfilePanelProps) 
                   csmId={csm.id}
                   csmName={csm.name}
                 />
+              </div>
+            )
+          ) : (
+            /* ── NPS & satisfaction Tab ── */
+            feedbackLoading ? (
+              <div className="flex items-center justify-center py-16">
+                <Loader2 className="w-6 h-6 text-primary-500 animate-spin" />
+                <span className="ml-2 text-sm text-slate-500">Loading feedback...</span>
+              </div>
+            ) : feedbackError ? (
+              <div className="px-6 py-8 text-center">
+                <p className="text-sm text-slate-500">Could not load NPS and satisfaction data.</p>
+              </div>
+            ) : (
+              <div className="p-4 space-y-6">
+                <p className="text-xs text-slate-500 px-1">
+                  SurveyMonkey NPS-style question and Freshdesk CSAT for accounts where this CSM is the owner on{' '}
+                  <span className="font-medium text-slate-600">dim_customers</span>. Configure{' '}
+                  <code className="text-[10px] bg-slate-100 px-1 rounded">FRESHDESK_PORTAL_BASE</code> and{' '}
+                  <code className="text-[10px] bg-slate-100 px-1 rounded">SURVEY_MONKEY_RESPONSE_URL_TEMPLATE</code>{' '}
+                  for ticket/survey links.
+                </p>
+
+                {feedbackData && (
+                  <>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <div className="bg-white rounded-xl border border-slate-200 p-3">
+                        <p className="text-[10px] text-slate-500 uppercase font-semibold tracking-wider">Responses</p>
+                        <p className="text-2xl font-bold text-slate-800">{feedbackData.summary.total}</p>
+                        <p className="text-[10px] text-slate-400 mt-1">
+                          {feedbackData.summary.unique_customers} accounts
+                        </p>
+                      </div>
+                      <div className="bg-white rounded-xl border border-slate-200 p-3">
+                        <p className="text-[10px] text-slate-500 uppercase font-semibold tracking-wider">NPS (proxy)</p>
+                        <p className={clsx(
+                          'text-2xl font-bold',
+                          feedbackData.summary.nps == null ? 'text-slate-400' :
+                          feedbackData.summary.nps >= 0 ? 'text-emerald-600' : 'text-rose-600'
+                        )}>
+                          {feedbackData.summary.nps != null ? `${feedbackData.summary.nps > 0 ? '+' : ''}${feedbackData.summary.nps}` : '—'}
+                        </p>
+                        <p className="text-[10px] text-slate-400 mt-1">Promoter − Detractor %</p>
+                      </div>
+                      <div className="bg-white rounded-xl border border-slate-200 p-3">
+                        <p className="text-[10px] text-slate-500 uppercase font-semibold tracking-wider">Prom / Pas / Det</p>
+                        <p className="text-lg font-bold text-slate-800">
+                          <span className="text-emerald-600">{feedbackData.summary.promoters}</span>
+                          <span className="text-slate-300 mx-1">/</span>
+                          <span className="text-amber-600">{feedbackData.summary.passives}</span>
+                          <span className="text-slate-300 mx-1">/</span>
+                          <span className="text-rose-600">{feedbackData.summary.detractors}</span>
+                        </p>
+                      </div>
+                      <div className="bg-white rounded-xl border border-slate-200 p-3">
+                        <p className="text-[10px] text-slate-500 uppercase font-semibold tracking-wider">By source</p>
+                        <p className="text-sm font-semibold text-slate-800 mt-1">
+                          Survey Monkey {feedbackData.summary.survey_monkey_count}
+                        </p>
+                        <p className="text-sm font-semibold text-slate-800">
+                          Freshdesk {feedbackData.summary.freshdesk_count}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div>
+                      <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-1">
+                        By customer
+                      </h3>
+                      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="bg-slate-50 text-left text-[10px] uppercase text-slate-500 border-b border-slate-100">
+                              <th className="px-3 py-2 font-semibold">Account</th>
+                              <th className="px-3 py-2 font-semibold">Region</th>
+                              <th className="px-3 py-2 font-semibold text-right">N</th>
+                              <th className="px-3 py-2 font-semibold text-right">P / Pas / Det</th>
+                              <th className="px-3 py-2 font-semibold">Last</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-50">
+                            {feedbackData.by_customer.length === 0 ? (
+                              <tr>
+                                <td colSpan={5} className="px-3 py-8 text-center text-slate-400 text-sm">
+                                  No feedback rows for this CSM&apos;s accounts.
+                                </td>
+                              </tr>
+                            ) : (
+                              feedbackData.by_customer.map(row => (
+                                <tr key={row.customer_name} className="hover:bg-slate-50/80">
+                                  <td className="px-3 py-2 font-medium text-slate-800">{row.customer_name}</td>
+                                  <td className="px-3 py-2 text-slate-500 text-xs">{row.region || '—'}</td>
+                                  <td className="px-3 py-2 text-right tabular-nums">{row.count}</td>
+                                  <td className="px-3 py-2 text-right text-xs">
+                                    <span className="text-emerald-600">{row.promoters}</span>
+                                    {' / '}
+                                    <span className="text-amber-600">{row.passives}</span>
+                                    {' / '}
+                                    <span className="text-rose-600">{row.detractors}</span>
+                                  </td>
+                                  <td className="px-3 py-2 text-xs text-slate-500">
+                                    {row.last_response_date ? formatDate(row.last_response_date) : '—'}
+                                  </td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    <div>
+                      <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-1">
+                        All responses (newest first)
+                      </h3>
+                      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden overflow-x-auto max-h-[420px] overflow-y-auto">
+                        <table className="w-full text-sm">
+                          <thead className="sticky top-0 bg-slate-50 z-10">
+                            <tr className="text-left text-[10px] uppercase text-slate-500 border-b border-slate-100">
+                              <th className="px-3 py-2 font-semibold">Date</th>
+                              <th className="px-3 py-2 font-semibold">Source</th>
+                              <th className="px-3 py-2 font-semibold">Account</th>
+                              <th className="px-3 py-2 font-semibold">Rating</th>
+                              <th className="px-3 py-2 font-semibold">NPS</th>
+                              <th className="px-3 py-2 font-semibold">AE</th>
+                              <th className="px-3 py-2 font-semibold">Feedback</th>
+                              <th className="px-3 py-2 font-semibold text-right">Link</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-50">
+                            {feedbackData.responses.length === 0 ? (
+                              <tr>
+                                <td colSpan={7} className="px-3 py-8 text-center text-slate-400 text-sm">
+                                  No rows.
+                                </td>
+                              </tr>
+                            ) : (
+                              feedbackData.responses.map((r, idx) => {
+                                const isFd = String(r.source || '').includes('Freshdesk')
+                                const hasFdDetail = isFd && (
+                                  r.ticket_id != null
+                                  || (r.ticket_subject && r.ticket_subject.trim())
+                                  || (r.ticket_status && String(r.ticket_status).trim())
+                                  || (r.feedback && r.feedback.trim())
+                                )
+                                return (
+                                  <Fragment key={`${r.source}-${r.record_id}-${r.ticket_id}-${idx}`}>
+                                    <tr className="hover:bg-slate-50/80 align-top">
+                                      <td className="px-3 py-2 text-xs text-slate-600 whitespace-nowrap">
+                                        {r.response_date ? formatDate(r.response_date) : '—'}
+                                      </td>
+                                      <td className="px-3 py-2 text-xs text-slate-600">{r.source}</td>
+                                      <td className="px-3 py-2 text-xs font-medium text-slate-800 max-w-[160px]" title={r.customer_name || ''}>
+                                        <span className="line-clamp-2">{r.customer_name || '—'}</span>
+                                      </td>
+                                      <td className="px-3 py-2 text-xs text-slate-600 max-w-[120px]">{r.rating_label || '—'}</td>
+                                      <td className="px-3 py-2 text-xs">
+                                        {r.nps_category ? (
+                                          <span className={clsx(
+                                            'font-semibold',
+                                            r.nps_category === 'Promoter' && 'text-emerald-600',
+                                            r.nps_category === 'Passive' && 'text-amber-600',
+                                            r.nps_category === 'Detractor' && 'text-rose-600'
+                                          )}>{r.nps_category}</span>
+                                        ) : '—'}
+                                      </td>
+                                      <td className="px-3 py-2 text-xs text-slate-500 max-w-[120px]" title={r.ae || ''}>
+                                        <span className="line-clamp-2">{r.ae || '—'}</span>
+                                      </td>
+                                      <td className="px-3 py-2 text-right whitespace-nowrap">
+                                        {r.drill_url ? (
+                                          <a
+                                            href={r.drill_url}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="inline-flex items-center gap-1 text-primary-600 hover:text-primary-700 text-xs font-medium"
+                                          >
+                                            {r.drill_label || 'Open'}
+                                            <ExternalLink className="w-3 h-3" />
+                                          </a>
+                                        ) : (
+                                          <span className="text-slate-300 text-xs">—</span>
+                                        )}
+                                      </td>
+                                    </tr>
+                                    {hasFdDetail && (
+                                      <tr className="bg-slate-50/90 border-b border-slate-100">
+                                        <td colSpan={7} className="px-3 py-3 text-xs text-slate-700">
+                                          <div className="pl-2 border-l-2 border-primary-300 space-y-2">
+                                            {r.ticket_id != null && (
+                                              <p>
+                                                <span className="font-semibold text-slate-600">Ticket</span>{' '}
+                                                <span className="tabular-nums font-medium text-slate-800">#{r.ticket_id}</span>
+                                              </p>
+                                            )}
+                                            {(r.ticket_status != null && String(r.ticket_status).trim()) && (
+                                              <p>
+                                                <span className="font-semibold text-slate-600">Status</span>{' '}
+                                                {String(r.ticket_status)}
+                                              </p>
+                                            )}
+                                            {(r.ticket_subject != null && r.ticket_subject.trim()) && (
+                                              <p>
+                                                <span className="font-semibold text-slate-600">Subject</span>{' '}
+                                                <span className="text-slate-800">{r.ticket_subject}</span>
+                                              </p>
+                                            )}
+                                            {(r.feedback != null && r.feedback.trim()) && (
+                                              <p>
+                                                <span className="font-semibold text-slate-600">CSAT feedback</span>
+                                                <span className="block mt-1 text-slate-800 whitespace-pre-wrap break-words">
+                                                  {r.feedback}
+                                                </span>
+                                              </p>
+                                            )}
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    )}
+                                  </Fragment>
+                                )
+                              })
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             )
           )}

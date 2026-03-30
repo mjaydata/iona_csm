@@ -1,5 +1,5 @@
 import { useQuery, useInfiniteQuery } from '@tanstack/react-query'
-import { getCSMStats, getCSMs, getAccountsWithCSM, getCSMProfile, getCSMAssignmentHistory, type GetAccountsWithCSMParams, type GetCSMsParams, type GetCSMStatsParams } from '../services/api'
+import { getCSMStats, getCSMs, getAccountsWithCSM, getCSMProfile, getCSMAssignmentHistory, getCSMFeedback, getCSMSupportTickets, type GetAccountsWithCSMParams, type GetCSMsParams, type GetCSMStatsParams, type GetCSMSupportTicketsParams } from '../services/api'
 
 export function useCSMStats(params: GetCSMStatsParams = {}) {
   return useQuery({
@@ -35,6 +35,34 @@ export function useCSMAssignmentHistory(csmId: string | null) {
     queryKey: ['csm-assignment-history', csmId],
     queryFn: () => getCSMAssignmentHistory(csmId!),
     enabled: !!csmId,
+  })
+}
+
+export function useCSMFeedback(csmId: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ['csm-feedback', csmId],
+    queryFn: () => getCSMFeedback(csmId!),
+    enabled: !!csmId && enabled,
+    staleTime: 60 * 1000,
+  })
+}
+
+export function useCSMSupportTickets(
+  csmId: string | null,
+  enabled: boolean,
+  params: GetCSMSupportTicketsParams = {}
+) {
+  const limit = params.limit ?? 40
+  const accountType = params.account_type
+  return useQuery({
+    queryKey: ['csm-support-tickets', csmId, limit, accountType ?? ''],
+    queryFn: () =>
+      getCSMSupportTickets(csmId!, {
+        limit,
+        ...(accountType ? { account_type: accountType } : {}),
+      }),
+    enabled: !!csmId && enabled,
+    staleTime: 60 * 1000,
   })
 }
 

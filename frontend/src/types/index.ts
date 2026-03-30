@@ -234,6 +234,7 @@ export type WidgetType =
   | 'usage' 
   | 'whitespace' 
   | 'contract' 
+  | 'implementation'
   | 'brief' 
   | 'changes' 
   | 'notes' 
@@ -339,6 +340,10 @@ export interface SupportTicketsResponse {
   total_pages: number
 }
 
+export interface CSMSupportTicketsResponse {
+  tickets: SupportTicket[]
+}
+
 export interface SupportTicket {
   id: string
   title: string
@@ -357,6 +362,7 @@ export interface SupportTicket {
   neutral_messages?: number
   last_message_at?: string
   ticket_type?: string
+  account_name?: string
 }
 
 // Usage Trends
@@ -631,6 +637,16 @@ export interface Signal {
   timestamp: string
   source: string
   is_read: boolean
+}
+
+/** Confluence KB client implementation summary for account detail widget */
+export interface ConfluenceImplementationResponse {
+  has_content: boolean
+  page_title?: string | null
+  page_text?: string | null
+  page_id?: string | null
+  space_id?: string | null
+  root_page_name?: string | null
 }
 
 // Full Account Detail Response

@@ -12,6 +12,7 @@ from ..models.schemas import (
     AccountFullDetail,
     AccountListResponse,
     AccountStatus,
+    ConfluenceImplementationResponse,
     HealthScoreDetail,
     HealthScoreHistoryResponse,
     HealthScoreHistoryPoint,
@@ -109,6 +110,24 @@ async def get_account_full_detail(
         raise
     except Exception as e:
         logger.error(f"get_account_full_detail error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{account_id}/confluence-implementation", response_model=ConfluenceImplementationResponse)
+async def get_confluence_implementation(
+    account_id: str,
+    db: DatabricksService = Depends(get_databricks_service),
+) -> ConfluenceImplementationResponse:
+    """Confluence client implementation KB (joined to dim_customers by account id / name)."""
+    try:
+        account = db.get_account_by_id(account_id)
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+        return db.get_confluence_implementation_context(account_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"get_confluence_implementation error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

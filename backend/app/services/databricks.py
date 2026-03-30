@@ -26,6 +26,7 @@ from ..models.schemas import (
     ContractGroup,
     LuminanceDocument,
     ContributingFactor,
+    ConfluenceImplementationResponse,
     CSM,
     CSMListResponse,
     CSMStats,
@@ -165,6 +166,7 @@ DIM_USERS_TABLE = "silver.silver_layer.dim_salesforce_ae_user"
 DIM_FRESHDESK_CUSTOMERS_TABLE = "silver.silver_layer.dim_freshdesk_account_customers"
 FCT_FRESHDESK_TICKETS_TABLE = "silver.silver_layer.fct_freshdesk_ticket_history"
 DIM_FRESHDESK_CONVERSATION_SUMMARY_TABLE = "silver.silver_layer.dim_freshdesk_ticket_conversation_summary"
+KB_CONFLUENCE_CUSTOMER_CONTEXT_TABLE = "silver.silver_layer.kb_confluence_customer_context"
 
 
 class DatabricksService:
@@ -1481,7 +1483,7 @@ class DatabricksService:
                         MIN(
                             CASE 
                                 WHEN fct.RENEWAL_NOT_YET_CONTRACTED = 'Y' 
-                                    AND fct.rev_rec_end_date IS NOT NULL
+                                    AND TRY_CAST(fct.rev_rec_end_date AS DATE) IS NOT NULL
                                 THEN DATEDIFF(TRY_CAST(fct.REV_REC_END_DATE AS DATE), CURRENT_DATE())
                                 ELSE 9999
                             END
@@ -1651,7 +1653,7 @@ class DatabricksService:
                                 WHEN fct.RENEWAL_NOT_YET_CONTRACTED = 'Y' 
                                     AND fct.revenue_type NOT IN ('Services', 'Perpetual')
                                     AND fct.churn_expected_occurred = 'nan'
-                                    AND fct.rev_rec_end_date > CURRENT_DATE()
+                                    AND TRY_CAST(fct.rev_rec_end_date AS DATE) > CURRENT_DATE()
                                 THEN DATEDIFF(TRY_CAST(fct.REV_REC_END_DATE AS DATE), CURRENT_DATE())
                                 ELSE 9999
                             END
@@ -1662,7 +1664,7 @@ class DatabricksService:
                         AND fct.RENEWAL_NOT_YET_CONTRACTED = 'Y'
                         AND fct.revenue_type NOT IN ('Services', 'Perpetual')
                         AND fct.churn_expected_occurred = 'nan'
-                        AND fct.rev_rec_end_date > CURRENT_DATE()
+                        AND TRY_CAST(fct.rev_rec_end_date AS DATE) > CURRENT_DATE()
                     GROUP BY ab.account_id, ab.name, ab.industry, ab.csm_name, ab.parent_id, ab.parent_name, ab.account_executive
                 ),
                 account_tickets AS (
@@ -1841,12 +1843,13 @@ class DatabricksService:
                 good, at_risk, critical = self._calculate_at_risk_count_by_health_score(conn, account_type)
 
                 # Renewal KPI from fct_contracts (EUR, dynamic period)
+                # TRY_CAST: rev_rec_end_date may be string 'nan' in fct_contracts
                 fct_where = f"""
                     c.RENEWAL_NOT_YET_CONTRACTED = 'Y'
                     AND c.revenue_type NOT IN ('Services', 'Perpetual')
                     AND c.churn_expected_occurred = 'nan'
-                    AND c.rev_rec_end_date > CURRENT_DATE()
-                    AND c.rev_rec_end_date <= DATE_ADD(CURRENT_DATE(), {int(renewal_period)})
+                    AND TRY_CAST(c.rev_rec_end_date AS DATE) > CURRENT_DATE()
+                    AND TRY_CAST(c.rev_rec_end_date AS DATE) <= DATE_ADD(CURRENT_DATE(), {int(renewal_period)})
                 """
                 if account_type:
                     fct_where += f"\n                    AND dc.account_type = '{safe_type}'"
@@ -1874,8 +1877,8 @@ class DatabricksService:
                     c.RENEWAL_NOT_YET_CONTRACTED = 'Y'
                     AND c.revenue_type NOT IN ('Services', 'Perpetual')
                     AND c.churn_expected_occurred = 'nan'
-                    AND c.rev_rec_end_date > CURRENT_DATE()
-                    AND YEAR(c.rev_rec_end_date) = YEAR(CURRENT_DATE())
+                    AND TRY_CAST(c.rev_rec_end_date AS DATE) > CURRENT_DATE()
+                    AND YEAR(TRY_CAST(c.rev_rec_end_date AS DATE)) = YEAR(CURRENT_DATE())
                 """
                 if account_type:
                     arr_where += f"\n                    AND dc.account_type = '{safe_type}'"
@@ -2554,8 +2557,8 @@ class DatabricksService:
                                 WHERE RENEWAL_NOT_YET_CONTRACTED = 'Y'
                                   AND revenue_type NOT IN ('Services', 'Perpetual')
                                   AND churn_expected_occurred = 'nan'
-                                  AND rev_rec_end_date > CURRENT_DATE()
-                                  AND rev_rec_end_date <= DATE_ADD(CURRENT_DATE(), 90)
+                                  AND TRY_CAST(rev_rec_end_date AS DATE) > CURRENT_DATE()
+                                  AND TRY_CAST(rev_rec_end_date AS DATE) <= DATE_ADD(CURRENT_DATE(), 90)
                                 GROUP BY ACCOUNT_ID
                             )
                         """)
@@ -2837,13 +2840,13 @@ class DatabricksService:
                         SELECT 
                             account_id,
                             SUM(ARR_EUR) as total_arr,
-                            MIN(rev_rec_end_date) as nearest_renewal_date,
+                            MIN(TRY_CAST(rev_rec_end_date AS DATE)) as nearest_renewal_date,
                             MIN(DATEDIFF(TRY_CAST(rev_rec_end_date AS DATE), CURRENT_DATE())) as renewal_days
                         FROM {FCT_TABLE}
                         WHERE RENEWAL_NOT_YET_CONTRACTED = 'Y'
                           AND revenue_type NOT IN ('Services', 'Perpetual')
                           AND churn_expected_occurred = 'nan'
-                          AND rev_rec_end_date > CURRENT_DATE()
+                          AND TRY_CAST(rev_rec_end_date AS DATE) > CURRENT_DATE()
                         GROUP BY account_id
                     ) arr_data ON c.account_id = arr_data.account_id
                     WHERE c.account_id = ?
@@ -4279,6 +4282,193 @@ class DatabricksService:
             logger.error(f"get_support_tickets_paginated error: {e}", exc_info=True)
             return [], 0
 
+    def get_csm_support_tickets_recent(
+        self,
+        csm_id: str,
+        limit: int = 40,
+        account_type: Optional[str] = None,
+    ) -> List[SupportTicket]:
+        """Tickets for Freshdesk companies linked to Navigate accounts owned by csm_c."""
+        limit = max(1, min(int(limit), 100))
+        type_cond = ""
+        params: dict = {"csm_id": csm_id}
+        if account_type and str(account_type).strip().lower() != "all":
+            type_cond = " AND c.account_type = :account_type"
+            params["account_type"] = account_type
+
+        logger.info(
+            f"get_csm_support_tickets_recent: csm_id={csm_id}, limit={limit}, account_type={account_type}"
+        )
+
+        try:
+            with self.get_connection() as conn:
+                if conn is None:
+                    return []
+
+                cursor = conn.cursor()
+                tickets_query = f"""
+                WITH csm_accounts AS (
+                    SELECT DISTINCT c.account AS account_name
+                    FROM {DIM_CUSTOMERS_TABLE} c
+                    WHERE c.csm_c = :csm_id AND c._fivetran_deleted = false{type_cond}
+                ),
+                freshdesk_company AS (
+                    SELECT fc.id AS company_id, ca.account_name AS nav_account_name
+                    FROM {DIM_FRESHDESK_CUSTOMERS_TABLE} fc
+                    INNER JOIN csm_accounts ca ON fc.name = ca.account_name
+                    WHERE fc._fivetran_deleted = false
+                )
+                SELECT
+                    t.id,
+                    t.subject,
+                    t.priority,
+                    t.label_for_customer,
+                    t.created_at,
+                    t.type,
+                    cs.ticket_summary,
+                    cs.net_sentiment_score,
+                    cs.total_messages,
+                    cs.customer_messages,
+                    cs.support_messages,
+                    cs.positive_messages,
+                    cs.negative_messages,
+                    cs.neutral_messages,
+                    cs.last_message_at,
+                    fdc.nav_account_name
+                FROM {FCT_FRESHDESK_TICKETS_TABLE} t
+                INNER JOIN freshdesk_company fdc ON t.company_id = fdc.company_id
+                LEFT JOIN {DIM_FRESHDESK_CONVERSATION_SUMMARY_TABLE} cs ON t.id = cs.ticket_id
+                ORDER BY t.created_at DESC
+                LIMIT {limit}
+                """
+                cursor.execute(tickets_query, params)
+                rows = cursor.fetchall()
+                cursor.close()
+
+                tickets: List[SupportTicket] = []
+                for row in rows:
+                    ticket_id = str(row[0])
+                    title = row[1] or "No subject"
+                    priority = row[2] or "Low"
+                    label = row[3] or "Open"
+                    created_at = row[4]
+                    ticket_type = row[5]
+                    summary = row[6]
+                    net_sentiment = int(row[7] or 0)
+                    total_messages = int(row[8] or 0)
+                    customer_messages = int(row[9] or 0)
+                    support_messages = int(row[10] or 0)
+                    positive_messages = int(row[11] or 0)
+                    negative_messages = int(row[12] or 0)
+                    neutral_messages = int(row[13] or 0)
+                    last_message_at = row[14]
+                    nav_account = row[15]
+                    nav_account_str = str(nav_account).strip() if nav_account is not None else None
+                    if nav_account_str in ("", "None", "nan"):
+                        nav_account_str = None
+
+                    severity = self._map_priority_to_severity(priority)
+                    status = self._map_label_to_status(label)
+
+                    if isinstance(created_at, str):
+                        try:
+                            created_at = datetime.fromisoformat(
+                                created_at.replace("Z", "+00:00").replace("+00:00", "")
+                            )
+                        except Exception:
+                            created_at = datetime.now()
+
+                    if isinstance(last_message_at, str):
+                        try:
+                            last_message_at = datetime.fromisoformat(
+                                last_message_at.replace("Z", "+00:00").replace("+00:00", "")
+                            )
+                        except Exception:
+                            last_message_at = None
+
+                    tickets.append(
+                        SupportTicket(
+                            id=ticket_id,
+                            title=title[:150],
+                            severity=severity,
+                            status=status,
+                            created_at=created_at,
+                            updated_at=created_at,
+                            summary=summary[:500] if summary else None,
+                            net_sentiment=net_sentiment,
+                            total_messages=total_messages,
+                            customer_messages=customer_messages,
+                            support_messages=support_messages,
+                            positive_messages=positive_messages,
+                            negative_messages=negative_messages,
+                            neutral_messages=neutral_messages,
+                            last_message_at=last_message_at,
+                            ticket_type=ticket_type,
+                            account_name=nav_account_str,
+                        )
+                    )
+
+                return tickets
+
+        except Exception as e:
+            logger.error(f"get_csm_support_tickets_recent error: {e}", exc_info=True)
+            return []
+
+    def get_confluence_implementation_context(self, account_id: str) -> ConfluenceImplementationResponse:
+        """Load Confluence client implementation page text joined to dim_customers by account id / name."""
+        logger.info(f"get_confluence_implementation_context: account_id={account_id}")
+        try:
+            with self.get_connection() as conn:
+                if conn is None:
+                    return ConfluenceImplementationResponse(has_content=False)
+
+                cursor = conn.cursor()
+                query = f"""
+                SELECT
+                    kb.page_title,
+                    kb.page_text,
+                    kb.page_id,
+                    kb.space_id,
+                    kb.root_page_name
+                FROM {KB_CONFLUENCE_CUSTOMER_CONTEXT_TABLE} kb
+                INNER JOIN {DIM_CUSTOMERS_TABLE} dc
+                  ON dc.account_id = :account_id
+                  AND dc._fivetran_deleted = false
+                WHERE kb.depth >= 1
+                  AND (
+                    kb.customer_id = dc.account_id
+                    OR TRIM(COALESCE(kb.customer_account, '')) = TRIM(COALESCE(dc.account, ''))
+                  )
+                ORDER BY
+                  CASE WHEN kb.customer_id IS NOT NULL AND kb.customer_id = dc.account_id THEN 0 ELSE 1 END,
+                  kb.depth DESC,
+                  LENGTH(COALESCE(CAST(kb.page_text AS STRING), '')) DESC
+                LIMIT 1
+                """
+                cursor.execute(query, {"account_id": account_id})
+                row = cursor.fetchone()
+                cursor.close()
+
+                if not row:
+                    return ConfluenceImplementationResponse(has_content=False)
+
+                title, text, page_id, space_id, root_name = row[0], row[1], row[2], row[3], row[4]
+                text_str = str(text).strip() if text is not None else ""
+                if not text_str:
+                    return ConfluenceImplementationResponse(has_content=False)
+                return ConfluenceImplementationResponse(
+                    has_content=True,
+                    page_title=str(title).strip() if title is not None else None,
+                    page_text=text_str,
+                    page_id=str(page_id) if page_id is not None else None,
+                    space_id=str(space_id) if space_id is not None else None,
+                    root_page_name=str(root_name).strip() if root_name is not None else None,
+                )
+
+        except Exception as e:
+            logger.error(f"get_confluence_implementation_context error: {e}", exc_info=True)
+            return ConfluenceImplementationResponse(has_content=False)
+
     def _build_full_detail_with_real_account(self, account_detail: AccountDetail) -> AccountFullDetail:
         """Build full detail response using real account header + placeholder widget data."""
         today = date.today()
@@ -5024,8 +5214,13 @@ class DatabricksService:
         FCT_TABLE = "silver.silver_layer.fct_contracts"
         with self.get_connection() as conn:
             if conn is None:
-                logger.warning("Connection is None, returning mock CSM stats")
-                return self._get_mock_csm_stats()
+                logger.warning("Connection is None, returning empty CSM stats")
+                return CSMStats(
+                    active_csms=0,
+                    avg_accounts_per_csm=0.0,
+                    unassigned_accounts=0,
+                    total_arr_managed=0.0,
+                )
 
             try:
                 cursor = conn.cursor()
@@ -5057,7 +5252,7 @@ class DatabricksService:
                       AND f.RENEWAL_NOT_YET_CONTRACTED = 'Y'
                       AND f.revenue_type NOT IN ('Services', 'Perpetual')
                       AND f.churn_expected_occurred = 'nan'
-                      AND f.rev_rec_end_date > CURRENT_DATE()
+                      AND TRY_CAST(f.rev_rec_end_date AS DATE) > CURRENT_DATE()
                 """)
                 arr_row = cursor.fetchone()
                 total_arr = float(arr_row[0]) if arr_row and arr_row[0] else 0.0
@@ -5073,7 +5268,12 @@ class DatabricksService:
                 )
             except Exception as e:
                 logger.error(f"Error fetching CSM stats: {e}")
-                return self._get_mock_csm_stats()
+                return CSMStats(
+                    active_csms=0,
+                    avg_accounts_per_csm=0.0,
+                    unassigned_accounts=0,
+                    total_arr_managed=0.0,
+                )
 
     def get_csm_assignment_history(self, csm_id: str) -> list[dict]:
         """Fetch assignment history for a CSM from the assignment history table.
@@ -5113,7 +5313,7 @@ class DatabricksService:
                 try:
                     cur2 = conn.cursor()
                     cur2.execute(f"""
-                        SELECT DISTINCT account_name
+                        SELECT DISTINCT account
                         FROM {DIM_CUSTOMERS_TABLE}
                         WHERE csm_c = '{safe_id}' AND _fivetran_deleted = false
                     """)
@@ -5361,6 +5561,170 @@ class DatabricksService:
             logger.error(f"insert_csm_assignment_history_record: {e}", exc_info=True)
             return False
 
+    def _drill_feedback_url(
+        self, source: Optional[str], ticket_id: Any, record_id: Any
+    ) -> Optional[str]:
+        """Build Freshdesk ticket or SurveyMonkey response URL when configured."""
+        src = (source or "").strip()
+        if "Freshdesk" in src and ticket_id is not None:
+            base = (self.settings.freshdesk_portal_base or "").strip().rstrip("/")
+            if base:
+                try:
+                    tid = int(ticket_id)
+                    return f"{base}/a/tickets/{tid}"
+                except (TypeError, ValueError):
+                    return None
+        if "Survey" in src and record_id is not None:
+            tpl = (self.settings.survey_monkey_response_url_template or "").strip()
+            if tpl:
+                rid = str(record_id).strip()
+                return tpl.replace("{response_id}", rid)
+        return None
+
+    def get_csm_feedback_satisfaction(self, csm_id: str) -> dict:
+        """NPS/CSAT rows for accounts owned by this CSM (SurveyMonkey + Freshdesk)."""
+        from .csm_feedback_query import build_csm_feedback_sql
+
+        empty: dict = {
+            "summary": {
+                "total": 0,
+                "survey_monkey_count": 0,
+                "freshdesk_count": 0,
+                "promoters": 0,
+                "passives": 0,
+                "detractors": 0,
+                "uncategorized": 0,
+                "nps": None,
+                "unique_customers": 0,
+            },
+            "by_customer": [],
+            "responses": [],
+        }
+        safe = self._sql_escape(csm_id)
+        with self.get_connection() as conn:
+            if conn is None:
+                return empty
+            try:
+                sql = build_csm_feedback_sql(safe, DIM_CUSTOMERS_TABLE, DIM_USERS_TABLE)
+                cursor = conn.cursor()
+                cursor.execute(sql)
+                rows = cursor.fetchall()
+                cursor.close()
+            except Exception as e:
+                logger.error(f"get_csm_feedback_satisfaction: {e}", exc_info=True)
+                return empty
+
+        cols = [
+            "source",
+            "record_id",
+            "ticket_id",
+            "csm",
+            "ae",
+            "customer_name",
+            "region",
+            "respondent_email",
+            "respondent_name",
+            "raw_score",
+            "rating_label",
+            "nps_category",
+            "response_status",
+            "feedback",
+            "ticket_subject",
+            "ticket_status",
+            "response_date",
+        ]
+        responses: List[dict] = []
+        str_cols = (
+            "feedback", "rating_label", "nps_category", "response_status", "csm", "ae",
+            "customer_name", "region", "respondent_email", "respondent_name", "source",
+            "ticket_subject", "ticket_status",
+        )
+        for row in rows:
+            item: dict = {}
+            for i, col in enumerate(cols):
+                v = row[i] if i < len(row) else None
+                if v is not None and hasattr(v, "isoformat"):
+                    v = v.isoformat()
+                elif v is not None and col in str_cols:
+                    v = str(v)
+                item[col] = v
+
+            src = item.get("source") or ""
+            drill = self._drill_feedback_url(src, item.get("ticket_id"), item.get("record_id"))
+            item["drill_url"] = drill
+            if drill:
+                item["drill_label"] = "Open ticket" if "Freshdesk" in str(src) else "View survey"
+            else:
+                item["drill_label"] = None
+            responses.append(item)
+
+        sm = fd = 0
+        p = pa = d = u = 0
+        by_cust: dict = {}
+
+        for item in responses:
+            s = str(item.get("source") or "")
+            if "Survey" in s:
+                sm += 1
+            elif "Freshdesk" in s:
+                fd += 1
+            cat = item.get("nps_category")
+            if cat == "Promoter":
+                p += 1
+            elif cat == "Passive":
+                pa += 1
+            elif cat == "Detractor":
+                d += 1
+            else:
+                u += 1
+
+            cn = (str(item.get("customer_name") or "")).strip() or "Unknown"
+            reg = item.get("region")
+            if cn not in by_cust:
+                by_cust[cn] = {
+                    "customer_name": cn,
+                    "region": reg,
+                    "count": 0,
+                    "promoters": 0,
+                    "passives": 0,
+                    "detractors": 0,
+                    "last_response_date": None,
+                }
+            bc = by_cust[cn]
+            bc["count"] += 1
+            if cat == "Promoter":
+                bc["promoters"] += 1
+            elif cat == "Passive":
+                bc["passives"] += 1
+            elif cat == "Detractor":
+                bc["detractors"] += 1
+            rdt = item.get("response_date")
+            if rdt and (bc["last_response_date"] is None or str(rdt) > str(bc["last_response_date"])):
+                bc["last_response_date"] = rdt
+
+        total = len(responses)
+        nps_cat_total = p + pa + d
+        nps_val: Optional[float] = None
+        if nps_cat_total > 0:
+            nps_val = round((p - d) / nps_cat_total * 100, 1)
+
+        by_customer = sorted(by_cust.values(), key=lambda x: (-x["count"], x["customer_name"]))
+
+        empty["summary"] = {
+            "total": total,
+            "survey_monkey_count": sm,
+            "freshdesk_count": fd,
+            "promoters": p,
+            "passives": pa,
+            "detractors": d,
+            "uncategorized": u,
+            "nps": nps_val,
+            "unique_customers": len(by_customer),
+        }
+        empty["by_customer"] = by_customer
+        empty["responses"] = responses
+        return empty
+
     def get_csm_profile(self, csm_id: str) -> Optional[dict]:
         """Fetch CSM profile from Salesforce user table."""
         SF_USER_TABLE = "workspace.salesforce.user"
@@ -5447,8 +5811,8 @@ class DatabricksService:
         FCT_TABLE = "silver.silver_layer.fct_contracts"
         with self.get_connection() as conn:
             if conn is None:
-                logger.warning("Connection is None, returning mock CSMs")
-                return self._get_mock_csms(status)
+                logger.warning("Connection is None, returning empty CSM list")
+                return CSMListResponse(csms=[], total=0)
 
             try:
                 cursor = conn.cursor()
@@ -5464,9 +5828,9 @@ class DatabricksService:
                         COUNT(DISTINCT c.account_id) as account_count,
                         COALESCE(SUM(f.ARR_EUR), 0) as total_arr,
                         COUNT(DISTINCT CASE 
-                            WHEN f.rev_rec_end_date IS NOT NULL 
-                                AND f.rev_rec_end_date <= DATE_ADD(CURRENT_DATE(), 90)
-                                AND f.rev_rec_end_date >= CURRENT_DATE()
+                            WHEN TRY_CAST(f.rev_rec_end_date AS DATE) IS NOT NULL 
+                                AND TRY_CAST(f.rev_rec_end_date AS DATE) <= DATE_ADD(CURRENT_DATE(), 90)
+                                AND TRY_CAST(f.rev_rec_end_date AS DATE) >= CURRENT_DATE()
                             THEN c.account_id 
                         END) as at_risk_count
                     FROM {DIM_USERS_TABLE} u
@@ -5475,7 +5839,7 @@ class DatabricksService:
                         AND f.RENEWAL_NOT_YET_CONTRACTED = 'Y'
                         AND f.revenue_type NOT IN ('Services', 'Perpetual')
                         AND f.churn_expected_occurred = 'nan'
-                        AND f.rev_rec_end_date > CURRENT_DATE()
+                        AND TRY_CAST(f.rev_rec_end_date AS DATE) > CURRENT_DATE()
                     GROUP BY u.id, u.name, u.email
                     ORDER BY account_count DESC
                 """)
@@ -5501,7 +5865,7 @@ class DatabricksService:
                 return CSMListResponse(csms=csms, total=len(csms))
             except Exception as e:
                 logger.error(f"Error fetching CSMs: {e}")
-                return self._get_mock_csms(status)
+                return CSMListResponse(csms=[], total=0)
 
     def get_accounts_with_csm(
         self,
@@ -5516,8 +5880,8 @@ class DatabricksService:
         logger.info(f"get_accounts_with_csm called: page={page}, csm_id={csm_id}, unassigned_only={unassigned_only}, account_type={account_type}")
         with self.get_connection() as conn:
             if conn is None:
-                logger.warning("Connection is None, returning mock accounts with CSM")
-                return self._get_mock_accounts_with_csm(page, page_size, csm_id, unassigned_only, search)
+                logger.warning("Connection is None, returning no accounts with CSM")
+                return [], 0
 
             try:
                 cursor = conn.cursor()
@@ -5544,7 +5908,7 @@ class DatabricksService:
                         WHERE RENEWAL_NOT_YET_CONTRACTED = 'Y'
                           AND revenue_type NOT IN ('Services', 'Perpetual')
                           AND churn_expected_occurred = 'nan'
-                          AND rev_rec_end_date > CURRENT_DATE()
+                          AND TRY_CAST(rev_rec_end_date AS DATE) > CURRENT_DATE()
                         GROUP BY account_id
                     ) arr_data ON c.account_id = arr_data.account_id
                     LEFT JOIN (
@@ -5662,93 +6026,7 @@ class DatabricksService:
                 return accounts, total
             except Exception as e:
                 logger.error(f"Error fetching accounts with CSM: {e}")
-                return self._get_mock_accounts_with_csm(page, page_size, csm_id, unassigned_only, search)
-
-    # ==================== CSM Mock Data Methods ====================
-
-    def _get_mock_csm_stats(self) -> CSMStats:
-        """Return mock CSM stats."""
-        return CSMStats(
-            active_csms=12,
-            avg_accounts_per_csm=15.2,
-            unassigned_accounts=3,
-            total_arr_managed=146170000.0,
-        )
-
-    def _get_mock_csms(self, status: Optional[str] = None) -> CSMListResponse:
-        """Return mock list of CSMs with various statuses."""
-        csms = [
-            # Active CSMs
-            CSM(id="csm-1", name="Anna Perez", email="anna.perez@company.com", status="active", account_count=18, total_arr=28500000, at_risk_count=3),
-            CSM(id="csm-2", name="Thomas Nguyen", email="thomas.nguyen@company.com", status="active", account_count=16, total_arr=24200000, at_risk_count=4),
-            CSM(id="csm-3", name="Priya Patel", email="priya.patel@company.com", status="active", account_count=15, total_arr=22100000, at_risk_count=2),
-            CSM(id="csm-4", name="Alex Chen", email="alex.chen@company.com", status="active", account_count=14, total_arr=19800000, at_risk_count=1),
-            CSM(id="csm-5", name="Sarah Robinson", email="sarah.robinson@company.com", status="active", account_count=14, total_arr=18500000, at_risk_count=2),
-            CSM(id="csm-6", name="Michael Smith", email="michael.smith@company.com", status="active", account_count=13, total_arr=17200000, at_risk_count=3),
-            CSM(id="csm-7", name="Emily Davis", email="emily.davis@company.com", status="active", account_count=12, total_arr=15800000, at_risk_count=1),
-            CSM(id="csm-8", name="James Wilson", email="james.wilson@company.com", status="active", account_count=11, total_arr=14500000, at_risk_count=2),
-            CSM(id="csm-9", name="Jessica Brown", email="jessica.brown@company.com", status="active", account_count=10, total_arr=12900000, at_risk_count=0),
-            CSM(id="csm-10", name="David Lee", email="david.lee@company.com", status="active", account_count=9, total_arr=11200000, at_risk_count=1),
-            # Inactive CSMs (on leave)
-            CSM(id="csm-11", name="Amanda Taylor", email="amanda.taylor@company.com", status="inactive", account_count=8, total_arr=9800000, at_risk_count=0),
-            # Departed CSMs (left company - accounts may need reassignment)
-            CSM(id="csm-12", name="Robert Garcia", email="robert.garcia@company.com", status="departed", account_count=7, total_arr=8500000, at_risk_count=1),
-            CSM(id="csm-13", name="Jennifer Martinez", email="jennifer.martinez@company.com", status="departed", account_count=5, total_arr=6200000, at_risk_count=2),
-        ]
-        
-        # Filter by status if specified
-        if status:
-            csms = [c for c in csms if c.status == status]
-        
-        return CSMListResponse(csms=csms, total=len(csms))
-
-    def _get_mock_accounts_with_csm(
-        self,
-        page: int,
-        page_size: int,
-        csm_id: Optional[str],
-        unassigned_only: bool,
-        search: Optional[str],
-    ) -> Tuple[List[AccountWithCSM], int]:
-        """Return mock accounts with CSM info."""
-        today = date.today()
-        accounts = [
-            AccountWithCSM(id="acc-1", name="Acme Corp", account_type="Enterprise", csm_id="csm-1", csm_name="Anna Perez", arr=2450000, health="Critical", renewal_date=today + timedelta(days=25), renewal_days=25),
-            AccountWithCSM(id="acc-2", name="Beacon Systems", account_type="Enterprise", csm_id="csm-2", csm_name="Thomas Nguyen", arr=1850000, health="Critical", renewal_date=today + timedelta(days=56), renewal_days=56),
-            AccountWithCSM(id="acc-3", name="Delta Industries", account_type="Mid-Market", csm_id="csm-3", csm_name="Priya Patel", arr=980000, health="At Risk", renewal_date=today + timedelta(days=45), renewal_days=45),
-            AccountWithCSM(id="acc-4", name="FinservX", account_type="Enterprise", csm_id="csm-4", csm_name="Alex Chen", arr=3200000, health="At Risk", renewal_date=today + timedelta(days=65), renewal_days=65),
-            AccountWithCSM(id="acc-5", name="Tyler Technologies", account_type="Enterprise", csm_id="csm-5", csm_name="Sarah Robinson", arr=4100000, health="Good", renewal_date=today + timedelta(days=188), renewal_days=188),
-            AccountWithCSM(id="acc-6", name="Infinisoft", account_type="Mid-Market", csm_id="csm-6", csm_name="Michael Smith", arr=750000, health="Good", renewal_date=today + timedelta(days=262), renewal_days=262),
-            AccountWithCSM(id="acc-7", name="Duke Energy", account_type="Enterprise", csm_id="csm-1", csm_name="Anna Perez", arr=5500000, health="Good", renewal_date=today + timedelta(days=145), renewal_days=145),
-            AccountWithCSM(id="acc-8", name="BC Hydro", account_type="Enterprise", csm_id="csm-2", csm_name="Thomas Nguyen", arr=2800000, health="At Risk", renewal_date=today + timedelta(days=78), renewal_days=78),
-            AccountWithCSM(id="acc-9", name="Hydro One", account_type="Enterprise", csm_id="csm-3", csm_name="Priya Patel", arr=3100000, health="Good", renewal_date=today + timedelta(days=320), renewal_days=320),
-            AccountWithCSM(id="acc-10", name="Acme Technologies", account_type="Mid-Market", csm_id="csm-4", csm_name="Alex Chen", arr=620000, health="Good", renewal_date=today + timedelta(days=210), renewal_days=210),
-            AccountWithCSM(id="acc-11", name="Global Solutions", account_type="Enterprise", csm_id="csm-5", csm_name="Sarah Robinson", arr=2900000, health="At Risk", renewal_date=today + timedelta(days=55), renewal_days=55),
-            AccountWithCSM(id="acc-12", name="BC Power Corp", account_type="Mid-Market", csm_id="csm-6", csm_name="Michael Smith", arr=890000, health="Critical", renewal_date=today + timedelta(days=20), renewal_days=20),
-            # Unassigned accounts
-            AccountWithCSM(id="acc-u1", name="NewCo Inc", account_type="SMB", csm_id=None, csm_name=None, arr=150000, health="Good", renewal_date=today + timedelta(days=180), renewal_days=180),
-            AccountWithCSM(id="acc-u2", name="StartupXYZ", account_type="SMB", csm_id=None, csm_name=None, arr=85000, health="Good", renewal_date=today + timedelta(days=220), renewal_days=220),
-            AccountWithCSM(id="acc-u3", name="TechStartup", account_type="SMB", csm_id=None, csm_name=None, arr=120000, health="At Risk", renewal_date=today + timedelta(days=45), renewal_days=45),
-        ]
-
-        # Apply filters
-        if csm_id:
-            accounts = [a for a in accounts if a.csm_id == csm_id]
-        
-        if unassigned_only:
-            accounts = [a for a in accounts if a.csm_id is None]
-
-        if search:
-            accounts = [a for a in accounts if search.lower() in a.name.lower()]
-
-        # Sort by name
-        accounts.sort(key=lambda a: a.name)
-
-        total = len(accounts)
-        start = (page - 1) * page_size
-        end = start + page_size
-        return accounts[start:end], total
-
+                return [], 0
 
     # ==================== ARR Analysis Methods ====================
 
@@ -5781,8 +6059,8 @@ class DatabricksService:
                 c.RENEWAL_NOT_YET_CONTRACTED = 'Y'
                 AND c.revenue_type NOT IN ('Services', 'Perpetual')
                 AND c.churn_expected_occurred = 'nan'
-                AND c.rev_rec_end_date > CURRENT_DATE()
-                AND c.rev_rec_end_date <= DATE_ADD(CURRENT_DATE(), {int(renewal_period)})
+                AND TRY_CAST(c.rev_rec_end_date AS DATE) > CURRENT_DATE()
+                AND TRY_CAST(c.rev_rec_end_date AS DATE) <= DATE_ADD(CURRENT_DATE(), {int(renewal_period)})
             """
             
             # Add account_type filter if specified
@@ -5818,7 +6096,7 @@ class DatabricksService:
                 LEFT JOIN {DIM_CUSTOMER_TABLE} dc ON c.account_id = dc.account_id
                 WHERE {base_where}
                   AND dc._fivetran_deleted = false
-                  AND c.rev_rec_end_date <= DATE_ADD(CURRENT_DATE(), 90)
+                  AND TRY_CAST(c.rev_rec_end_date AS DATE) <= DATE_ADD(CURRENT_DATE(), 90)
             """
             cursor.execute(renewals_query)
             renewals_row = cursor.fetchone()
@@ -5903,8 +6181,8 @@ class DatabricksService:
                 "f.RENEWAL_NOT_YET_CONTRACTED = 'Y'",
                 "f.revenue_type NOT IN ('Services', 'Perpetual')",
                 "f.churn_expected_occurred = 'nan'",
-                "f.rev_rec_end_date > CURRENT_DATE()",
-                f"f.rev_rec_end_date <= DATE_ADD(CURRENT_DATE(), {int(renewal_period)})",
+                "TRY_CAST(f.rev_rec_end_date AS DATE) > CURRENT_DATE()",
+                f"TRY_CAST(f.rev_rec_end_date AS DATE) <= DATE_ADD(CURRENT_DATE(), {int(renewal_period)})",
             ]
             params = []
             
@@ -5997,8 +6275,8 @@ class DatabricksService:
                     AND renewal_not_yet_contracted = 'Y'
                     AND revenue_type NOT IN ('Services', 'Perpetual')
                     AND churn_expected_occurred = 'nan'
-                    AND rev_rec_end_date > CURRENT_DATE()
-                    AND rev_rec_end_date <= DATE_ADD(CURRENT_DATE(), {int(renewal_period)})
+                    AND TRY_CAST(rev_rec_end_date AS DATE) > CURRENT_DATE()
+                    AND TRY_CAST(rev_rec_end_date AS DATE) <= DATE_ADD(CURRENT_DATE(), {int(renewal_period)})
                     GROUP BY account, contract_group, revenue_type, currency
                     ORDER BY account, 6 DESC
                 """

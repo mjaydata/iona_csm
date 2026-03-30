@@ -1,6 +1,7 @@
 import axios from 'axios'
 import type { 
-  AccountFullDetail, 
+  AccountFullDetail,
+  ConfluenceImplementationResponse,
   AccountListResponse, 
   AccountWithCSMListResponse,
   ARRAnalysisResponse,
@@ -12,7 +13,8 @@ import type {
   MetricsSummary, 
   Task, 
   TaskCreate,
-  SupportTicketsResponse 
+  SupportTicketsResponse,
+  CSMSupportTicketsResponse,
 } from '../types'
 
 const api = axios.create({
@@ -73,6 +75,15 @@ export async function getAccountById(id: string) {
 
 export async function getAccountFullDetail(id: string): Promise<AccountFullDetail> {
   const { data } = await api.get<AccountFullDetail>(`/accounts/${id}/full-detail`)
+  return data
+}
+
+export async function getConfluenceImplementation(
+  accountId: string
+): Promise<ConfluenceImplementationResponse> {
+  const { data } = await api.get<ConfluenceImplementationResponse>(
+    `/accounts/${accountId}/confluence-implementation`
+  )
   return data
 }
 
@@ -192,6 +203,19 @@ export async function getSupportTickets(
     `/accounts/${accountId}/support-tickets`, 
     { params }
   )
+  return data
+}
+
+export interface GetCSMSupportTicketsParams {
+  limit?: number
+  account_type?: string
+}
+
+export async function getCSMSupportTickets(
+  csmId: string,
+  params: GetCSMSupportTicketsParams = {}
+): Promise<CSMSupportTicketsResponse> {
+  const { data } = await api.get<CSMSupportTicketsResponse>(`/csm/support-tickets/${csmId}`, { params })
   return data
 }
 
@@ -331,6 +355,61 @@ export interface CSMAssignmentHistoryCreatePayload {
 
 export async function createCSMAssignmentHistory(body: CSMAssignmentHistoryCreatePayload): Promise<void> {
   await api.post('/csm/assignment-history/create', body)
+}
+
+export interface CSMFeedbackSummary {
+  total: number
+  survey_monkey_count: number
+  freshdesk_count: number
+  promoters: number
+  passives: number
+  detractors: number
+  uncategorized: number
+  nps: number | null
+  unique_customers: number
+}
+
+export interface CSMFeedbackByCustomer {
+  customer_name: string
+  region: string | null
+  count: number
+  promoters: number
+  passives: number
+  detractors: number
+  last_response_date: string | null
+}
+
+export interface CSMFeedbackResponseRow {
+  source: string
+  record_id: string | number | null
+  ticket_id: string | number | null
+  csm: string | null
+  ae: string | null
+  customer_name: string | null
+  region: string | null
+  respondent_email: string | null
+  respondent_name: string | null
+  raw_score: number | null
+  rating_label: string | null
+  nps_category: string | null
+  response_status: string | null
+  feedback: string | null
+  ticket_subject: string | null
+  ticket_status: string | null
+  response_date: string | null
+  drill_url: string | null
+  drill_label: string | null
+}
+
+export interface CSMFeedbackPayload {
+  summary: CSMFeedbackSummary
+  by_customer: CSMFeedbackByCustomer[]
+  responses: CSMFeedbackResponseRow[]
+}
+
+export async function getCSMFeedback(csmId: string): Promise<CSMFeedbackPayload> {
+  const { data } = await api.get<CSMFeedbackPayload>(`/csm/feedback/${csmId}`)
+  return data
 }
 
 // ARR Analysis

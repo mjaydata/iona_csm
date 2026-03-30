@@ -260,6 +260,7 @@ class SupportTicket(BaseModel):
     neutral_messages: int = 0
     last_message_at: Optional[datetime] = None
     ticket_type: Optional[str] = None  # Help Request, Product Defect, etc.
+    account_name: Optional[str] = None  # Navigate account (e.g. CSM-wide ticket lists)
 
 
 class ResolutionBucket(BaseModel):
@@ -312,6 +313,11 @@ class SupportTicketsResponse(BaseModel):
     page: int
     page_size: int
     total_pages: int
+
+
+class CSMSupportTicketsResponse(BaseModel):
+    """Recent support tickets across all accounts owned by a CSM."""
+    tickets: List[SupportTicket]
 
 
 class UsageTrend(BaseModel):
@@ -632,6 +638,17 @@ class SignalDetail(BaseModel):
     timestamp: datetime
     source: str
     is_read: bool = False
+
+
+class ConfluenceImplementationResponse(BaseModel):
+    """Confluence KB client implementation summary (kb_confluence_customer_context) for an account."""
+
+    has_content: bool = False
+    page_title: Optional[str] = None
+    page_text: Optional[str] = None
+    page_id: Optional[str] = None
+    space_id: Optional[str] = None
+    root_page_name: Optional[str] = None
 
 
 class AccountFullDetail(BaseModel):
