@@ -379,6 +379,20 @@ export interface CSMFeedbackByCustomer {
   last_response_date: string | null
 }
 
+export interface CSMFeedbackSurveyQA {
+  question: string
+  answer: string
+}
+
+export interface CSMFeedbackCsatEntry {
+  label: string | null
+  value: number | null
+  rating_label: string | null
+  nps_category: string | null
+  feedback: string | null
+  response_date: string | null
+}
+
 export interface CSMFeedbackResponseRow {
   source: string
   record_id: string | number | null
@@ -399,6 +413,10 @@ export interface CSMFeedbackResponseRow {
   response_date: string | null
   drill_url: string | null
   drill_label: string | null
+  /** SurveyMonkey: all Q&A for this response (expand row). */
+  survey_questions?: CSMFeedbackSurveyQA[]
+  /** Freshdesk: all CSAT rows for this ticket (expand row). */
+  csat_entries?: CSMFeedbackCsatEntry[]
 }
 
 export interface CSMFeedbackPayload {

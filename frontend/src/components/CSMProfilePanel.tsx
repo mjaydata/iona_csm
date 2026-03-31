@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useRef, Fragment } from 'react'
+import { useState, useMemo, useCallback, useRef, useEffect, Fragment } from 'react'
 import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { 
@@ -22,6 +22,8 @@ import {
   Plus,
   BarChart2,
   ExternalLink,
+  ChevronRight,
+  ChevronDown,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { CSM } from '../types'
@@ -63,6 +65,12 @@ function formatDate(dateStr: string): string {
     if (isNaN(d.getTime())) return dateStr || '—'
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
   } catch { return dateStr || '—' }
+}
+
+function feedbackPreview(text: string | null | undefined, max = 64): string {
+  if (text == null || !String(text).trim()) return '—'
+  const t = String(text).trim()
+  return t.length <= max ? t : `${t.slice(0, max)}…`
 }
 
 function formatTenure(months: number): string {
@@ -831,6 +839,7 @@ export function CSMProfilePanel({ csm, isOpen, onClose }: CSMProfilePanelProps) 
   const [activeTab, setActiveTab] = useState<PanelTab>('profile')
   const [hoveredChartIdx, setHoveredChartIdx] = useState<number | null>(null)
   const [statusFilter, setStatusFilter] = useState<string | null>(null)
+  const [expandedFeedbackKeys, setExpandedFeedbackKeys] = useState<Set<string>>(() => new Set())
 
   const { data: profile, isLoading: profileLoading, isError: profileError } = useCSMProfile(isOpen ? csm.id : null)
   const { data: historyData, isLoading: historyLoading } = useCSMAssignmentHistory(isOpen ? csm.id : null)
@@ -838,6 +847,19 @@ export function CSMProfilePanel({ csm, isOpen, onClose }: CSMProfilePanelProps) 
     isOpen ? csm.id : null,
     isOpen && activeTab === 'feedback',
   )
+
+  useEffect(() => {
+    setExpandedFeedbackKeys(new Set())
+  }, [csm.id, isOpen])
+
+  const toggleFeedbackRow = useCallback((key: string) => {
+    setExpandedFeedbackKeys((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }, [])
 
   const isDeparted = csm.status === 'departed'
   const isInactive = csm.status === 'inactive'
@@ -1232,35 +1254,53 @@ export function CSMProfilePanel({ csm, isOpen, onClose }: CSMProfilePanelProps) 
                         <table className="w-full text-sm">
                           <thead className="sticky top-0 bg-slate-50 z-10">
                             <tr className="text-left text-[10px] uppercase text-slate-500 border-b border-slate-100">
+                              <th className="w-8 px-1 py-2" aria-label="Details" />
                               <th className="px-3 py-2 font-semibold">Date</th>
                               <th className="px-3 py-2 font-semibold">Source</th>
                               <th className="px-3 py-2 font-semibold">Account</th>
                               <th className="px-3 py-2 font-semibold">Rating</th>
                               <th className="px-3 py-2 font-semibold">NPS</th>
                               <th className="px-3 py-2 font-semibold">AE</th>
-                              <th className="px-3 py-2 font-semibold">Feedback</th>
+                              <th className="px-3 py-2 font-semibold max-w-[140px]">Feedback</th>
                               <th className="px-3 py-2 font-semibold text-right">Link</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-50">
                             {feedbackData.responses.length === 0 ? (
                               <tr>
-                                <td colSpan={7} className="px-3 py-8 text-center text-slate-400 text-sm">
+                                <td colSpan={9} className="px-3 py-8 text-center text-slate-400 text-sm">
                                   No rows.
                                 </td>
                               </tr>
                             ) : (
                               feedbackData.responses.map((r, idx) => {
+                                const rowKey = `${r.source}-${r.record_id}-${r.ticket_id}-${idx}`
+                                const expanded = expandedFeedbackKeys.has(rowKey)
+                                const isSm = String(r.source || '').includes('Survey')
                                 const isFd = String(r.source || '').includes('Freshdesk')
-                                const hasFdDetail = isFd && (
-                                  r.ticket_id != null
-                                  || (r.ticket_subject && r.ticket_subject.trim())
-                                  || (r.ticket_status && String(r.ticket_status).trim())
-                                  || (r.feedback && r.feedback.trim())
-                                )
+                                const canExpand = isSm || isFd
                                 return (
-                                  <Fragment key={`${r.source}-${r.record_id}-${r.ticket_id}-${idx}`}>
+                                  <Fragment key={rowKey}>
                                     <tr className="hover:bg-slate-50/80 align-top">
+                                      <td className="px-1 py-2 align-top">
+                                        {canExpand ? (
+                                          <button
+                                            type="button"
+                                            className="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100"
+                                            aria-expanded={expanded}
+                                            title={expanded ? 'Hide details' : 'Show full response'}
+                                            onClick={() => toggleFeedbackRow(rowKey)}
+                                          >
+                                            {expanded ? (
+                                              <ChevronDown className="w-4 h-4" />
+                                            ) : (
+                                              <ChevronRight className="w-4 h-4" />
+                                            )}
+                                          </button>
+                                        ) : (
+                                          <span className="inline-block w-6" />
+                                        )}
+                                      </td>
                                       <td className="px-3 py-2 text-xs text-slate-600 whitespace-nowrap">
                                         {r.response_date ? formatDate(r.response_date) : '—'}
                                       </td>
@@ -1282,6 +1322,9 @@ export function CSMProfilePanel({ csm, isOpen, onClose }: CSMProfilePanelProps) 
                                       <td className="px-3 py-2 text-xs text-slate-500 max-w-[120px]" title={r.ae || ''}>
                                         <span className="line-clamp-2">{r.ae || '—'}</span>
                                       </td>
+                                      <td className="px-3 py-2 text-xs text-slate-600 max-w-[140px]" title={r.feedback || ''}>
+                                        <span className="line-clamp-2 break-words">{feedbackPreview(r.feedback, 80)}</span>
+                                      </td>
                                       <td className="px-3 py-2 text-right whitespace-nowrap">
                                         {r.drill_url ? (
                                           <a
@@ -1298,35 +1341,98 @@ export function CSMProfilePanel({ csm, isOpen, onClose }: CSMProfilePanelProps) 
                                         )}
                                       </td>
                                     </tr>
-                                    {hasFdDetail && (
-                                      <tr className="bg-slate-50/90 border-b border-slate-100">
-                                        <td colSpan={7} className="px-3 py-3 text-xs text-slate-700">
-                                          <div className="pl-2 border-l-2 border-primary-300 space-y-2">
-                                            {r.ticket_id != null && (
-                                              <p>
-                                                <span className="font-semibold text-slate-600">Ticket</span>{' '}
-                                                <span className="tabular-nums font-medium text-slate-800">#{r.ticket_id}</span>
-                                              </p>
+                                    {expanded && canExpand && (
+                                      <tr className="bg-slate-50/95 border-b border-slate-100">
+                                        <td colSpan={9} className="px-3 py-4 text-xs text-slate-700">
+                                          <div className="pl-2 border-l-2 border-primary-400 space-y-4">
+                                            {isSm && (
+                                              <div>
+                                                <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-2">
+                                                  SurveyMonkey — all questions
+                                                </p>
+                                                {r.survey_questions && r.survey_questions.length > 0 ? (
+                                                  <div className="space-y-3">
+                                                    {r.survey_questions.map((qa, qidx) => (
+                                                      <div key={qidx} className="pb-3 border-b border-slate-200/80 last:border-0 last:pb-0">
+                                                        <p className="text-[11px] font-semibold text-slate-600">{qa.question || 'Question'}</p>
+                                                        <p className="text-sm text-slate-800 mt-1 whitespace-pre-wrap break-words">
+                                                          {qa.answer || '—'}
+                                                        </p>
+                                                      </div>
+                                                    ))}
+                                                  </div>
+                                                ) : (
+                                                  <p className="text-slate-400">No per-question answers returned.</p>
+                                                )}
+                                              </div>
                                             )}
-                                            {(r.ticket_status != null && String(r.ticket_status).trim()) && (
-                                              <p>
-                                                <span className="font-semibold text-slate-600">Status</span>{' '}
-                                                {String(r.ticket_status)}
-                                              </p>
-                                            )}
-                                            {(r.ticket_subject != null && r.ticket_subject.trim()) && (
-                                              <p>
-                                                <span className="font-semibold text-slate-600">Subject</span>{' '}
-                                                <span className="text-slate-800">{r.ticket_subject}</span>
-                                              </p>
-                                            )}
-                                            {(r.feedback != null && r.feedback.trim()) && (
-                                              <p>
-                                                <span className="font-semibold text-slate-600">CSAT feedback</span>
-                                                <span className="block mt-1 text-slate-800 whitespace-pre-wrap break-words">
-                                                  {r.feedback}
-                                                </span>
-                                              </p>
+                                            {isFd && (
+                                              <div>
+                                                <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-2">
+                                                  Freshdesk — ticket &amp; CSAT
+                                                </p>
+                                                <div className="space-y-2 mb-3">
+                                                  {r.ticket_id != null && (
+                                                    <p>
+                                                      <span className="font-semibold text-slate-600">Ticket</span>{' '}
+                                                      <span className="tabular-nums font-medium text-slate-800">#{r.ticket_id}</span>
+                                                    </p>
+                                                  )}
+                                                  {(r.ticket_status != null && String(r.ticket_status).trim()) && (
+                                                    <p>
+                                                      <span className="font-semibold text-slate-600">Status</span>{' '}
+                                                      {String(r.ticket_status)}
+                                                    </p>
+                                                  )}
+                                                  {(r.ticket_subject != null && r.ticket_subject.trim()) && (
+                                                    <p>
+                                                      <span className="font-semibold text-slate-600">Subject</span>{' '}
+                                                      <span className="text-slate-800">{r.ticket_subject}</span>
+                                                    </p>
+                                                  )}
+                                                </div>
+                                                {r.csat_entries && r.csat_entries.length > 0 ? (
+                                                  <div className="space-y-3">
+                                                    {r.csat_entries.map((c, cidx) => (
+                                                      <div key={cidx} className="rounded-lg bg-white border border-slate-200/80 p-3 space-y-1">
+                                                        <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
+                                                          {c.label && (
+                                                            <span><span className="text-slate-500">Prompt:</span> {c.label}</span>
+                                                          )}
+                                                          {c.rating_label && (
+                                                            <span className="font-medium text-slate-800">{c.rating_label}</span>
+                                                          )}
+                                                          {c.nps_category && (
+                                                            <span className={clsx(
+                                                              'font-semibold',
+                                                              c.nps_category === 'Promoter' && 'text-emerald-600',
+                                                              c.nps_category === 'Passive' && 'text-amber-600',
+                                                              c.nps_category === 'Detractor' && 'text-rose-600'
+                                                            )}>{c.nps_category}</span>
+                                                          )}
+                                                          {c.response_date && (
+                                                            <span className="text-slate-400">{formatDate(c.response_date)}</span>
+                                                          )}
+                                                        </div>
+                                                        {c.feedback && c.feedback.trim() && (
+                                                          <p className="text-sm text-slate-800 whitespace-pre-wrap break-words pt-1">
+                                                            {c.feedback}
+                                                          </p>
+                                                        )}
+                                                      </div>
+                                                    ))}
+                                                  </div>
+                                                ) : (
+                                                  (r.feedback != null && r.feedback.trim()) && (
+                                                    <p>
+                                                      <span className="font-semibold text-slate-600">CSAT feedback</span>
+                                                      <span className="block mt-1 text-slate-800 whitespace-pre-wrap break-words">
+                                                        {r.feedback}
+                                                      </span>
+                                                    </p>
+                                                  )
+                                                )}
+                                              </div>
                                             )}
                                           </div>
                                         </td>

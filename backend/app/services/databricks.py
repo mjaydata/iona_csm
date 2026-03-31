@@ -5581,6 +5581,173 @@ class DatabricksService:
                 return tpl.replace("{response_id}", rid)
         return None
 
+    @staticmethod
+    def _flatten_survey_monkey_pivot_row(description: Any, row: tuple) -> List[dict]:
+        """Turn pivot row (finance column names) into ordered list of {question, answer} for the UI."""
+        meta_display = {
+            "response_id": None,
+            "survey_type": "Survey type",
+            "company": "Company",
+            "respondent": "Respondent",
+            "email": "Email",
+            "response_date": "Response date",
+            "ifs_contact": "IFS contact",
+        }
+        out: List[dict] = []
+        cols = description or ()
+        for i, col in enumerate(cols):
+            raw = col[0] if col else ""
+            name = (raw or "").strip()
+            lname = name.lower()
+            if lname == "response_id":
+                continue
+            val = row[i] if i < len(row) else None
+            if val is None:
+                continue
+            if hasattr(val, "isoformat"):
+                sval = val.isoformat()
+            else:
+                sval = str(val).strip()
+            if not sval:
+                continue
+            if lname in meta_display:
+                disp = meta_display[lname]
+                if disp is None:
+                    continue
+                q_label = disp
+            else:
+                q_label = name
+            out.append({"question": q_label, "answer": sval})
+        return out
+
+    def _merge_csm_feedback_details(self, safe_csm_id: str, responses: List[dict]) -> None:
+        """Attach survey_questions (SurveyMonkey pivot) and csat_entries (all Freshdesk CSAT lines per ticket)."""
+        from .csm_feedback_query import (
+            build_freshdesk_csat_for_tickets_sql,
+            build_survey_monkey_pivot_for_response_ids_sql,
+        )
+
+        sm_ids: List[int] = []
+        for item in responses:
+            if "Survey" not in str(item.get("source") or ""):
+                continue
+            rid = item.get("record_id")
+            if rid is None:
+                continue
+            try:
+                sm_ids.append(int(rid))
+            except (TypeError, ValueError):
+                try:
+                    sm_ids.append(int(float(rid)))
+                except (TypeError, ValueError):
+                    continue
+        uniq_sm = sorted(set(sm_ids))
+
+        sm_by: dict = {}
+        if uniq_sm:
+            chunk_size = 100
+            try:
+                with self.get_connection() as conn:
+                    if conn is None:
+                        pass
+                    else:
+                        for i in range(0, len(uniq_sm), chunk_size):
+                            chunk = uniq_sm[i : i + chunk_size]
+                            ids_in = ",".join(str(x) for x in chunk)
+                            sql = build_survey_monkey_pivot_for_response_ids_sql(
+                                safe_csm_id, DIM_CUSTOMERS_TABLE, ids_in
+                            )
+                            cur = conn.cursor()
+                            cur.execute(sql)
+                            desc = cur.description
+                            for row in cur.fetchall():
+                                rid = row[0] if row else None
+                                if rid is None:
+                                    continue
+                                rkey = str(int(rid))
+                                sm_by[rkey] = self._flatten_survey_monkey_pivot_row(desc, row)
+                            cur.close()
+            except Exception as e:
+                logger.warning(f"SurveyMonkey pivot enrichment skipped: {e}", exc_info=True)
+
+        for item in responses:
+            if "Survey" in str(item.get("source") or ""):
+                rid = item.get("record_id")
+                if rid is not None:
+                    try:
+                        rkey = str(int(rid))
+                    except (TypeError, ValueError):
+                        try:
+                            rkey = str(int(float(rid)))
+                        except (TypeError, ValueError):
+                            rkey = str(rid)
+                    item["survey_questions"] = sm_by.get(rkey, [])
+
+        ticket_ids: List[int] = []
+        for item in responses:
+            if "Freshdesk" not in str(item.get("source") or ""):
+                continue
+            tid = item.get("ticket_id")
+            if tid is None:
+                continue
+            try:
+                ticket_ids.append(int(tid))
+            except (TypeError, ValueError):
+                continue
+        uniq = sorted(set(ticket_ids))
+        if not uniq:
+            return
+
+        fd_by: dict = {}
+        chunk_size = 150
+        try:
+            with self.get_connection() as conn:
+                if conn is None:
+                    return
+                for i in range(0, len(uniq), chunk_size):
+                    chunk = uniq[i : i + chunk_size]
+                    ids_in = ",".join(str(x) for x in chunk)
+                    sql = build_freshdesk_csat_for_tickets_sql(ids_in)
+                    cur = conn.cursor()
+                    cur.execute(sql)
+                    for row in cur.fetchall():
+                        tid_raw = row[0]
+                        label = row[1]
+                        val = row[2]
+                        rlab = row[3]
+                        npc = row[4]
+                        fb = row[5]
+                        rdt = row[6]
+                        if rdt is not None and hasattr(rdt, "isoformat"):
+                            rdt = rdt.isoformat()
+                        elif rdt is not None:
+                            rdt = str(rdt)
+                        entry = {
+                            "label": str(label) if label is not None else None,
+                            "value": int(val) if val is not None else None,
+                            "rating_label": str(rlab) if rlab is not None else None,
+                            "nps_category": str(npc) if npc is not None else None,
+                            "feedback": str(fb) if fb is not None else None,
+                            "response_date": rdt,
+                        }
+                        tid_key = str(int(tid_raw)) if tid_raw is not None else ""
+                        fd_by.setdefault(tid_key, []).append(entry)
+                    cur.close()
+        except Exception as e:
+            logger.warning(f"Freshdesk CSAT enrichment skipped: {e}", exc_info=True)
+
+        for item in responses:
+            if "Freshdesk" not in str(item.get("source") or ""):
+                continue
+            tid = item.get("ticket_id")
+            if tid is None:
+                continue
+            try:
+                tk = str(int(tid))
+            except (TypeError, ValueError):
+                tk = str(tid)
+            item["csat_entries"] = fd_by.get(tk, [])
+
     def get_csm_feedback_satisfaction(self, csm_id: str) -> dict:
         """NPS/CSAT rows for accounts owned by this CSM (SurveyMonkey + Freshdesk)."""
         from .csm_feedback_query import build_csm_feedback_sql
@@ -5656,7 +5823,11 @@ class DatabricksService:
                 item["drill_label"] = "Open ticket" if "Freshdesk" in str(src) else "View survey"
             else:
                 item["drill_label"] = None
+            item["survey_questions"] = []
+            item["csat_entries"] = []
             responses.append(item)
+
+        self._merge_csm_feedback_details(safe, responses)
 
         sm = fd = 0
         p = pa = d = u = 0

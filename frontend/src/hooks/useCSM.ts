@@ -15,10 +15,14 @@ export function useCSMs(params: GetCSMsParams = {}) {
   })
 }
 
-export function useAccountsWithCSM(params: GetAccountsWithCSMParams = {}) {
+export function useAccountsWithCSM(
+  params: GetAccountsWithCSMParams = {},
+  options?: { enabled?: boolean }
+) {
   return useQuery({
     queryKey: ['accounts-with-csm', params],
     queryFn: () => getAccountsWithCSM(params),
+    enabled: options?.enabled ?? true,
   })
 }
 

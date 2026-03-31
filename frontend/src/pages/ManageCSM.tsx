@@ -14,12 +14,10 @@ import {
   UserX,
   User,
   Info,
-  Headphones,
 } from 'lucide-react'
 import { clsx } from 'clsx'
-import { useCSMStats, useCSMs, useAccountsWithCSM, useCSMSupportTickets } from '../hooks/useCSM'
+import { useCSMStats, useCSMs, useAccountsWithCSM } from '../hooks/useCSM'
 import { CSMProfilePanel } from '../components/CSMProfilePanel'
-import { SupportTicketCard } from '../components/SupportTicketCard'
 import { healthBadgeLabel } from '../utils/healthLabels'
 import type { CSM, AccountWithCSM, CSMStatus, RenewalInfo } from '../types'
 
@@ -394,16 +392,14 @@ function CSMRow({
   accountType?: string
 }) {
   // Fetch accounts for this CSM when expanded
-  const { data: accountsData, isLoading: accountsLoading } = useAccountsWithCSM({
-    csm_id: csm.id,
-    page_size: 100,
-    account_type: accountType,
-  })
-
-  const { data: ticketsData, isLoading: ticketsLoading } = useCSMSupportTickets(csm.id, isExpanded, {
-    limit: 40,
-    ...(accountType ? { account_type: accountType } : {}),
-  })
+  const { data: accountsData, isLoading: accountsLoading } = useAccountsWithCSM(
+    {
+      csm_id: csm.id,
+      page_size: 100,
+      account_type: accountType,
+    },
+    { enabled: isExpanded }
+  )
 
   const workloadPercent = expectedAccounts > 0 ? (csm.account_count / expectedAccounts) * 100 : 100
   const workloadLevel = workloadPercent > 120 ? 'high' : workloadPercent < 80 ? 'low' : 'normal'
@@ -614,29 +610,6 @@ function CSMRow({
                         </div>
                       </div>
                     ))}
-                  </div>
-
-                  <div className="mt-5 pt-4 border-t border-slate-200">
-                    <h4 className="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-3 flex items-center gap-2">
-                      <Headphones className="w-4 h-4 text-slate-500" />
-                      Recent support tickets
-                    </h4>
-                    {ticketsLoading ? (
-                      <div className="flex items-center gap-2 text-sm text-slate-500 py-4">
-                        <Loader2 className="w-4 h-4 animate-spin text-primary-500" />
-                        Loading tickets…
-                      </div>
-                    ) : ticketsData?.tickets && ticketsData.tickets.length > 0 ? (
-                      <div className="space-y-2 max-h-[480px] overflow-y-auto pr-1">
-                        {ticketsData.tickets.map((t) => (
-                          <SupportTicketCard key={t.id} ticket={t} />
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-sm text-slate-400 py-2">
-                        No recent tickets for assigned accounts.
-                      </p>
-                    )}
                   </div>
                 </div>
               ) : (

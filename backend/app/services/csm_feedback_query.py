@@ -152,3 +152,124 @@ SELECT * FROM (
 ORDER BY response_date DESC
 LIMIT 500
 """
+
+
+def build_survey_monkey_pivot_for_response_ids_sql(
+    safe_csm_id: str, dim_customers: str, ids_in: str
+) -> str:
+    """Pivot one row per response_id with known Relationship / Accelerate / Implementation questions.
+
+    Matches finance-approved SurveyMonkey logic: COALESCE(qo.text, ra.text), HTML strip, COLLECT_SET
+    multi-selects, matrix sub-questions via sub_question_history. Scoped to CSM via dim_customers.
+
+    ids_in: comma-separated numeric response_history ids (rh.id), SQL-escaped upstream.
+    """
+    sm_case = _SM_ACCOUNT_CASE
+    # _a: stripped answer text from MC or open-ended
+    _a = "REGEXP_REPLACE(COALESCE(qo.text, ra.text), '<[^>]*>', '')"
+    return f"""
+SELECT
+  rh.id AS response_id,
+  MAX(CASE
+    WHEN rh.collector_id IN (330439833, 330439914) THEN 'Relationship'
+    WHEN rh.collector_id IN (330464615, 330424468) THEN 'Accelerate'
+    WHEN rh.collector_id IN (330455619, 330458685, 330409181) THEN 'Implementation'
+    ELSE 'Other'
+  END) AS survey_type,
+  MAX(CASE
+    WHEN rec.custom_field_2 RLIKE '^[0-9]+$' THEN COALESCE(rh.custom_value, rec.custom_field_2)
+    ELSE COALESCE(rec.custom_field_2, rh.custom_value)
+  END) AS company,
+  MAX(COALESCE(rec.custom_field_1, rh.custom_value, rec.email, 'Anonymous')) AS respondent,
+  MAX(rec.email) AS email,
+  MAX(rh.created_at) AS response_date,
+  MAX(rec.custom_field_3) AS ifs_contact,
+
+  MAX(CASE WHEN ra.question_id = 64134281 THEN {_a} END) AS `Overall Satisfaction (Rel)`,
+  MAX(CASE WHEN ra.question_id = 64134290 THEN {_a} END) AS `Success Story`,
+  MAX(CASE WHEN ra.question_id = 64134291 THEN {_a} END) AS `Improvement Needed`,
+  MAX(CASE WHEN ra.question_id = 64134292 THEN {_a} END) AS `Greatest Benefit`,
+  MAX(CASE WHEN ra.question_id = 64134293 THEN {_a} END) AS `Better Experience`,
+  MAX(CASE WHEN ra.question_id = 64134307 THEN {_a} END) AS `Support and Innovation`,
+  MAX(CASE WHEN ra.question_id = 64134308 THEN {_a} END) AS `Consent to Share (Rel)`,
+  MAX(CASE WHEN ra.question_id = 64134314 THEN {_a} END) AS `Team Recognition (Rel)`,
+  MAX(CASE WHEN ra.question_id = 64213676 THEN {_a} END) AS `Usage Frequency`,
+  MAX(CASE WHEN ra.question_id = 64213677 THEN {_a} END) AS `Number of Users`,
+  MAX(CASE WHEN ra.question_id = 64213678 THEN {_a} END) AS `Achieved Key Goals`,
+  MAX(CASE WHEN ra.question_id = 64213944 THEN {_a} END) AS `Well Informed Updates`,
+  CONCAT_WS('; ', COLLECT_SET(CASE WHEN ra.question_id = 64214090 THEN {_a} END)) AS `Business Challenges`,
+  MAX(CASE WHEN ra.question_id = 64227018 THEN {_a} END) AS `Products Used`,
+  MAX(CASE WHEN ra.question_id = 64227019 THEN {_a} END) AS `Feature Requests`,
+  CONCAT_WS('; ', COLLECT_SET(CASE WHEN ra.question_id = 64227168 THEN
+    CONCAT(REGEXP_REPLACE(COALESCE(sq.text, ''), '<[^>]*>', ''), ': ', {_a}) END)) AS `Engagement`,
+  CONCAT_WS('; ', COLLECT_SET(CASE WHEN ra.question_id = 64227171 THEN
+    CONCAT(REGEXP_REPLACE(COALESCE(sq.text, ''), '<[^>]*>', ''), ': ', {_a}) END)) AS `Engagement Value`,
+  MAX(CASE WHEN ra.question_id = 64227181 THEN {_a} END) AS `Intuitiveness`,
+  MAX(CASE WHEN ra.question_id = 64229227 THEN {_a} END) AS `Easy to Business`,
+  MAX(CASE WHEN ra.question_id = 64229286 THEN {_a} END) AS `Responsiveness`,
+  MAX(CASE WHEN ra.question_id = 64229290 THEN {_a} END) AS `Point of Contact`,
+  MAX(CASE WHEN ra.question_id = 64229298 THEN {_a} END) AS `Team Knowledge`,
+
+  MAX(CASE WHEN ra.question_id = 64061389 THEN {_a} END) AS `Overall Satisfaction (Acc)`,
+  MAX(CASE WHEN ra.question_id = 64061380 THEN {_a} END) AS `Positive Feedback`,
+  MAX(CASE WHEN ra.question_id = 64061381 THEN {_a} END) AS `Improvement Feedback`,
+  MAX(CASE WHEN ra.question_id = 64061383 THEN {_a} END) AS `Consent to Share (Acc)`,
+
+  MAX(CASE WHEN ra.question_id = 64061154 THEN {_a} END) AS `Implementation Satisfaction`,
+  MAX(CASE WHEN ra.question_id = 64061155 THEN {_a} END) AS `Most Valuable Part`,
+  MAX(CASE WHEN ra.question_id = 64061157 THEN {_a} END) AS `Expectations Met`,
+  MAX(CASE WHEN ra.question_id = 64081678 THEN {_a} END) AS `Additional Detail`,
+  MAX(CASE WHEN ra.question_id = 64134313 THEN {_a} END) AS `Team Recognition (Impl)`
+
+FROM workspace.survey_monkey.response_answer ra
+  JOIN workspace.survey_monkey.response_history rh
+    ON ra.response_id = rh.id
+    AND rh._fivetran_active = true
+  LEFT JOIN workspace.survey_monkey.question_option_history qo
+    ON ra.choice_id = qo.id
+    AND qo._fivetran_active = true
+  LEFT JOIN workspace.survey_monkey.sub_question_history sq
+    ON ra.row_id = sq.id
+    AND sq._fivetran_active = true
+  LEFT JOIN workspace.survey_monkey.recipient rec
+    ON CAST(rh.recipient_id AS STRING) = rec.id
+  INNER JOIN {dim_customers} c
+    ON {sm_case} = c.account
+    AND c._fivetran_deleted = false
+    AND c.csm_c = '{safe_csm_id}'
+WHERE rh.id IN ({ids_in})
+  AND rh.collector_id IN (
+    330439833, 330439914, 330464615, 330424468, 330455619, 330458685, 330409181
+  )
+GROUP BY rh.id
+"""
+
+
+def build_freshdesk_csat_for_tickets_sql(ticket_ids_sql_in: str) -> str:
+    """All CSAT satisfaction rows for the given ticket ids (comma-separated numeric list)."""
+    return f"""
+SELECT
+  csat.ticket_id,
+  csat.label,
+  CAST(csat.value AS INT) AS value,
+  CASE CAST(csat.value AS INT)
+    WHEN 103  THEN 'Extremely Happy'
+    WHEN 102  THEN 'Very Happy'
+    WHEN 101  THEN 'Happy'
+    WHEN 100  THEN 'Neutral'
+    WHEN -101 THEN 'Unhappy'
+    WHEN -102 THEN 'Very Unhappy'
+    WHEN -103 THEN 'Extremely Unhappy'
+  END AS rating_label,
+  CASE
+    WHEN CAST(csat.value AS INT) >= 102 THEN 'Promoter'
+    WHEN CAST(csat.value AS INT) BETWEEN 100 AND 101 THEN 'Passive'
+    WHEN CAST(csat.value AS INT) < 0 THEN 'Detractor'
+  END AS nps_category,
+  csat.feedback,
+  csat.response_date
+FROM silver.silver_layer.fct_freshdesk_csat csat
+WHERE csat.ticket_id IN ({ticket_ids_sql_in})
+  AND csat.value IS NOT NULL
+ORDER BY csat.ticket_id, csat.response_date DESC
+"""
