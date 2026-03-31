@@ -14,6 +14,12 @@ from .config import get_settings
 
 settings = get_settings()
 
+# Avoid stale SPA shell after deploy: browsers must revalidate index.html so new /assets/*.js hashes load.
+_HTML_NO_CACHE_HEADERS = {
+    "Cache-Control": "no-cache, no-store, must-revalidate",
+    "Pragma": "no-cache",
+}
+
 app = FastAPI(
     title=settings.app_name,
     description="Customer Success Management Dashboard API",
@@ -50,7 +56,7 @@ if static_dir.exists():
     @app.get("/")
     async def serve_spa():
         """Serve the React SPA index.html."""
-        return FileResponse(static_dir / "index.html")
+        return FileResponse(static_dir / "index.html", headers=_HTML_NO_CACHE_HEADERS)
 
     @app.get("/logo.png")
     async def serve_logo():
@@ -74,7 +80,7 @@ if static_dir.exists():
                     content={"detail": "Not found"}
                 )
             # Non-API routes: serve SPA for client-side routing
-            return FileResponse(static_dir / "index.html")
+            return FileResponse(static_dir / "index.html", headers=_HTML_NO_CACHE_HEADERS)
         # Re-raise other HTTP exceptions
         return JSONResponse(
             status_code=exc.status_code,
