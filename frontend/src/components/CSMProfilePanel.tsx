@@ -24,6 +24,10 @@ import {
   ExternalLink,
   ChevronRight,
   ChevronDown,
+  Download,
+  MessageCircle,
+  CalendarDays,
+  ListFilter,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { CSM } from '../types'
@@ -34,6 +38,8 @@ import {
   createCSMAssignmentHistory,
   getDistinctCsmNamesFromHistory,
   getCSMs,
+  type CSMFeedbackResponseRow,
+  type CSMFeedbackByCustomer,
 } from '../services/api'
 import { useCSMProfile, useCSMAssignmentHistory, useCSMFeedback } from '../hooks/useCSM'
 
@@ -88,6 +94,254 @@ function formatDays(days: number | null): string {
   const y = Math.floor(days / 365)
   const m = Math.round((days % 365) / 30.44)
   return m > 0 ? `${y}y ${m}mo` : `${y}y`
+}
+
+// ── NPS tab: filters & derived metrics (client-side) ──
+type FeedbackDatePreset = '90d' | '6m' | 'ytd' | 'all'
+type FeedbackSourceFilter = 'all' | 'survey' | 'freshdesk'
+
+function isSurveyMonkeySource(source: string | null | undefined): boolean {
+  return String(source || '').includes('Survey')
+}
+function isFreshdeskSource(source: string | null | undefined): boolean {
+  return String(source || '').includes('Freshdesk')
+}
+
+function getPresetStartDate(preset: FeedbackDatePreset): Date | null {
+  const now = new Date()
+  if (preset === 'all') return null
+  if (preset === '90d') {
+    const d = new Date(now)
+    d.setDate(d.getDate() - 90)
+    d.setHours(0, 0, 0, 0)
+    return d
+  }
+  if (preset === '6m') {
+    const d = new Date(now)
+    d.setMonth(d.getMonth() - 6)
+    d.setHours(0, 0, 0, 0)
+    return d
+  }
+  if (preset === 'ytd') {
+    return new Date(now.getFullYear(), 0, 1, 0, 0, 0, 0)
+  }
+  return null
+}
+
+function parseResponseDate(iso: string | null | undefined): Date | null {
+  if (!iso) return null
+  const d = new Date(iso)
+  return isNaN(d.getTime()) ? null : d
+}
+
+function filterFeedbackResponses(
+  rows: CSMFeedbackResponseRow[],
+  preset: FeedbackDatePreset,
+  source: FeedbackSourceFilter,
+): CSMFeedbackResponseRow[] {
+  const start = getPresetStartDate(preset)
+  return rows.filter((r) => {
+    if (source === 'survey' && !isSurveyMonkeySource(r.source)) return false
+    if (source === 'freshdesk' && !isFreshdeskSource(r.source)) return false
+    if (start) {
+      const rd = parseResponseDate(r.response_date)
+      if (!rd || rd < start) return false
+    }
+    return true
+  })
+}
+
+interface FilteredFeedbackSummary {
+  total: number
+  survey_monkey_count: number
+  freshdesk_count: number
+  promoters: number
+  passives: number
+  detractors: number
+  uncategorized: number
+  nps: number | null
+  unique_customers: number
+  freshdesk_csat_avg: number | null
+  freshdesk_csat_scale: 5 | 10
+}
+
+function computeFilteredFeedbackSummary(rows: CSMFeedbackResponseRow[]): FilteredFeedbackSummary {
+  let sm = 0
+  let fd = 0
+  let p = 0
+  let pa = 0
+  let d = 0
+  let u = 0
+  const customers = new Set<string>()
+  const fdScores: number[] = []
+  for (const r of rows) {
+    const s = String(r.source || '')
+    if (s.includes('Survey')) sm++
+    else if (s.includes('Freshdesk')) fd++
+    const cat = r.nps_category
+    if (cat === 'Promoter') p++
+    else if (cat === 'Passive') pa++
+    else if (cat === 'Detractor') d++
+    else u++
+    const cn = (r.customer_name || '').trim()
+    if (cn) customers.add(cn)
+    if (s.includes('Freshdesk') && r.raw_score != null && !Number.isNaN(Number(r.raw_score))) {
+      fdScores.push(Number(r.raw_score))
+    }
+  }
+  const nps_cat_total = p + pa + d
+  let nps: number | null = null
+  if (nps_cat_total > 0) {
+    nps = Math.round(((p - d) / nps_cat_total) * 1000) / 10
+  }
+  let freshdesk_csat_avg: number | null = null
+  let freshdesk_csat_scale: 5 | 10 = 5
+  if (fdScores.length > 0) {
+    const max = Math.max(...fdScores)
+    freshdesk_csat_scale = max > 5 ? 10 : 5
+    freshdesk_csat_avg = fdScores.reduce((a, b) => a + b, 0) / fdScores.length
+  }
+  return {
+    total: rows.length,
+    survey_monkey_count: sm,
+    freshdesk_count: fd,
+    promoters: p,
+    passives: pa,
+    detractors: d,
+    uncategorized: u,
+    nps,
+    unique_customers: customers.size,
+    freshdesk_csat_avg,
+    freshdesk_csat_scale,
+  }
+}
+
+function aggregateByCustomerFromResponses(rows: CSMFeedbackResponseRow[]): CSMFeedbackByCustomer[] {
+  const byCust: Record<string, CSMFeedbackByCustomer> = {}
+  for (const item of rows) {
+    const cn = (String(item.customer_name || '')).trim() || 'Unknown'
+    const reg = item.region
+    if (!byCust[cn]) {
+      byCust[cn] = {
+        customer_name: cn,
+        region: reg,
+        count: 0,
+        promoters: 0,
+        passives: 0,
+        detractors: 0,
+        last_response_date: null,
+      }
+    }
+    const bc = byCust[cn]
+    if (reg && !bc.region) bc.region = reg
+    bc.count += 1
+    const cat = item.nps_category
+    if (cat === 'Promoter') bc.promoters += 1
+    else if (cat === 'Passive') bc.passives += 1
+    else if (cat === 'Detractor') bc.detractors += 1
+    const rdt = item.response_date
+    if (rdt && (!bc.last_response_date || String(rdt) > String(bc.last_response_date))) {
+      bc.last_response_date = rdt
+    }
+  }
+  return Object.values(byCust).sort((a, b) => (b.count - a.count) || a.customer_name.localeCompare(b.customer_name))
+}
+
+function npsQualityLabel(nps: number | null): { label: string; className: string } | null {
+  if (nps == null) return null
+  if (nps >= 50) return { label: 'EXCELLENT', className: 'bg-emerald-100 text-emerald-900' }
+  if (nps >= 30) return { label: 'STRONG', className: 'bg-sky-100 text-sky-900' }
+  if (nps >= 0) return { label: 'GOOD', className: 'bg-amber-100 text-amber-900' }
+  return { label: 'AT RISK', className: 'bg-rose-100 text-rose-900' }
+}
+
+function feedbackScoreBadge(r: CSMFeedbackResponseRow): string {
+  if (r.raw_score != null && !Number.isNaN(Number(r.raw_score))) {
+    const n = Number(r.raw_score)
+    const scale = n > 5 ? 10 : 5
+    return `${n} / ${scale}`
+  }
+  if (r.rating_label?.trim()) return r.rating_label.trim()
+  if (r.nps_category) return r.nps_category
+  return '—'
+}
+
+function extractVerbatim(r: CSMFeedbackResponseRow): string | null {
+  const fb = r.feedback?.trim()
+  if (fb) return fb
+  const qs = r.survey_questions
+  if (qs && qs.length) {
+    let best = ''
+    for (const qa of qs) {
+      const a = (qa.answer || '').trim()
+      if (!a) continue
+      const q = (qa.question || '').toLowerCase()
+      if (/(story|comment|feedback|why|tell us)/i.test(q) && a.length > best.length) best = a
+    }
+    if (!best) {
+      for (const qa of qs) {
+        const a = (qa.answer || '').trim()
+        if (a.length > best.length) best = a
+      }
+    }
+    return best || null
+  }
+  if (r.csat_entries && r.csat_entries.length) {
+    const texts = r.csat_entries.map((c) => c.feedback?.trim()).filter(Boolean) as string[]
+    if (texts.length) return texts.join(' ')
+  }
+  return null
+}
+
+function respondentInitials(r: CSMFeedbackResponseRow): string {
+  const name = (r.respondent_name || r.respondent_email || '').trim()
+  if (!name) return '?'
+  const parts = name.split(/[\s@]+/).filter(Boolean)
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase()
+  return name.slice(0, 2).toUpperCase()
+}
+
+function relativeFeedbackTime(iso: string | null | undefined): string {
+  const d = parseResponseDate(iso)
+  if (!d) return ''
+  const now = new Date()
+  const diffMs = now.getTime() - d.getTime()
+  const days = Math.floor(diffMs / (24 * 60 * 60 * 1000))
+  if (days <= 0) return 'Today'
+  if (days === 1) return 'Yesterday'
+  if (days < 7) return `${days} days ago`
+  if (days < 30) return `${Math.floor(days / 7)} wk ago`
+  return formatDate(iso!)
+}
+
+function exportFeedbackCsv(rows: CSMFeedbackResponseRow[], filenameBase: string) {
+  const headers = ['response_date', 'source', 'customer_name', 'region', 'rating_label', 'nps_category', 'raw_score', 'feedback', 'drill_url']
+  const esc = (v: string | number | null | undefined) => {
+    const s = v == null ? '' : String(v)
+    if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`
+    return s
+  }
+  const lines = [headers.join(',')]
+  for (const r of rows) {
+    lines.push([
+      esc(r.response_date),
+      esc(r.source),
+      esc(r.customer_name),
+      esc(r.region),
+      esc(r.rating_label),
+      esc(r.nps_category),
+      esc(r.raw_score),
+      esc(r.feedback),
+      esc(r.drill_url),
+    ].join(','))
+  }
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${filenameBase}-feedback.csv`
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 function ProfileStatCard({ 
@@ -840,6 +1094,8 @@ export function CSMProfilePanel({ csm, isOpen, onClose }: CSMProfilePanelProps) 
   const [hoveredChartIdx, setHoveredChartIdx] = useState<number | null>(null)
   const [statusFilter, setStatusFilter] = useState<string | null>(null)
   const [expandedFeedbackKeys, setExpandedFeedbackKeys] = useState<Set<string>>(() => new Set())
+  const [feedbackDatePreset, setFeedbackDatePreset] = useState<FeedbackDatePreset>('90d')
+  const [feedbackSourceFilter, setFeedbackSourceFilter] = useState<FeedbackSourceFilter>('all')
 
   const { data: profile, isLoading: profileLoading, isError: profileError } = useCSMProfile(isOpen ? csm.id : null)
   const { data: historyData, isLoading: historyLoading } = useCSMAssignmentHistory(isOpen ? csm.id : null)
@@ -850,6 +1106,8 @@ export function CSMProfilePanel({ csm, isOpen, onClose }: CSMProfilePanelProps) 
 
   useEffect(() => {
     setExpandedFeedbackKeys(new Set())
+    setFeedbackDatePreset('90d')
+    setFeedbackSourceFilter('all')
   }, [csm.id, isOpen])
 
   const toggleFeedbackRow = useCallback((key: string) => {
@@ -882,6 +1140,38 @@ export function CSMProfilePanel({ csm, isOpen, onClose }: CSMProfilePanelProps) 
 
   const timeline = useMemo(() => buildMonthlyTimeline(historyData || []), [historyData])
 
+  const filteredFeedbackResponses = useMemo(() => {
+    if (!feedbackData?.responses) return []
+    return filterFeedbackResponses(feedbackData.responses, feedbackDatePreset, feedbackSourceFilter)
+  }, [feedbackData?.responses, feedbackDatePreset, feedbackSourceFilter])
+
+  const filteredFeedbackSummary = useMemo(
+    () => computeFilteredFeedbackSummary(filteredFeedbackResponses),
+    [filteredFeedbackResponses],
+  )
+
+  const filteredByCustomer = useMemo(
+    () => aggregateByCustomerFromResponses(filteredFeedbackResponses),
+    [filteredFeedbackResponses],
+  )
+
+  const recentVerbatimRows = useMemo(() => {
+    const withText = filteredFeedbackResponses
+      .map((r) => ({ r, text: extractVerbatim(r) }))
+      .filter((x) => x.text && x.text.trim().length > 0)
+    withText.sort((a, b) => {
+      const ta = parseResponseDate(a.r.response_date)?.getTime() ?? 0
+      const tb = parseResponseDate(b.r.response_date)?.getTime() ?? 0
+      return tb - ta
+    })
+    return withText.slice(0, 8)
+  }, [filteredFeedbackResponses])
+
+  const npsQualityBadge = useMemo(
+    () => npsQualityLabel(filteredFeedbackSummary.nps),
+    [filteredFeedbackSummary.nps],
+  )
+
   const historySummary = useMemo(() => {
     if (!historyData || !historyData.length) return null
     const current = historyData.filter(r => r.status === 'Current').length
@@ -899,7 +1189,12 @@ export function CSMProfilePanel({ csm, isOpen, onClose }: CSMProfilePanelProps) 
     <>
       <div className="fixed inset-0 top-[57px] bg-black/20 z-40 transition-opacity" onClick={onClose} />
 
-      <div className="fixed right-0 top-[57px] bottom-0 w-full max-w-5xl bg-white shadow-2xl z-50 overflow-hidden flex flex-col animate-slide-in-right">
+      <div
+        className={clsx(
+          'fixed right-0 top-[57px] bottom-0 w-full bg-white shadow-2xl z-50 overflow-hidden flex flex-col animate-slide-in-right',
+          activeTab === 'feedback' ? 'max-w-6xl' : 'max-w-5xl',
+        )}
+      >
         {/* Header */}
         <div className={clsx(
           'px-6 py-4 border-b flex items-start justify-between',
@@ -1149,108 +1444,250 @@ export function CSMProfilePanel({ csm, isOpen, onClose }: CSMProfilePanelProps) 
                 <p className="text-sm text-slate-500">Could not load NPS and satisfaction data.</p>
               </div>
             ) : (
-              <div className="p-4 space-y-6">
-                <p className="text-xs text-slate-500 px-1">
+              <div className="p-5 pb-8 space-y-8">
+                <p className="text-[11px] text-slate-500 leading-relaxed">
                   SurveyMonkey NPS-style question and Freshdesk CSAT for accounts where this CSM is the owner on{' '}
                   <span className="font-medium text-slate-600">dim_customers</span>. Configure{' '}
-                  <code className="text-[10px] bg-slate-100 px-1 rounded">FRESHDESK_PORTAL_BASE</code> and{' '}
-                  <code className="text-[10px] bg-slate-100 px-1 rounded">SURVEY_MONKEY_RESPONSE_URL_TEMPLATE</code>{' '}
-                  for ticket/survey links.
+                  <code className="text-[10px] bg-slate-100 px-1 rounded font-mono">FRESHDESK_PORTAL_BASE</code> and{' '}
+                  <code className="text-[10px] bg-slate-100 px-1 rounded font-mono">SURVEY_MONKEY_RESPONSE_URL_TEMPLATE</code>{' '}
+                  for ticket/survey links. Filters below apply to KPIs, the table, verbatim, export, and the full log.
                 </p>
 
                 {feedbackData && (
                   <>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                      <div className="bg-white rounded-xl border border-slate-200 p-3">
-                        <p className="text-[10px] text-slate-500 uppercase font-semibold tracking-wider">Responses</p>
-                        <p className="text-2xl font-bold text-slate-800">{feedbackData.summary.total}</p>
+                    <div className="flex flex-col sm:flex-row gap-3">
+                      <div className="flex-1 relative min-w-0">
+                        <CalendarDays className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+                        <select
+                          value={feedbackDatePreset}
+                          onChange={(e) => setFeedbackDatePreset(e.target.value as FeedbackDatePreset)}
+                          className="w-full pl-10 pr-3 py-2.5 bg-slate-50 border border-slate-200/80 rounded-xl text-xs font-medium text-slate-700 focus:ring-2 focus:ring-primary-500/20 focus:border-primary-300"
+                        >
+                          <option value="90d">Last 90 days</option>
+                          <option value="6m">Last 6 months</option>
+                          <option value="ytd">Year to date</option>
+                          <option value="all">All time</option>
+                        </select>
+                      </div>
+                      <div className="flex-1 relative min-w-0">
+                        <ListFilter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+                        <select
+                          value={feedbackSourceFilter}
+                          onChange={(e) => setFeedbackSourceFilter(e.target.value as FeedbackSourceFilter)}
+                          className="w-full pl-10 pr-3 py-2.5 bg-slate-50 border border-slate-200/80 rounded-xl text-xs font-medium text-slate-700 focus:ring-2 focus:ring-primary-500/20 focus:border-primary-300"
+                        >
+                          <option value="all">All sources</option>
+                          <option value="survey">SurveyMonkey</option>
+                          <option value="freshdesk">Freshdesk</option>
+                        </select>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => exportFeedbackCsv(filteredFeedbackResponses, `csm-${csm.id}`)}
+                        disabled={filteredFeedbackResponses.length === 0}
+                        className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-primary-600 text-white text-xs font-semibold hover:bg-primary-700 disabled:opacity-40 disabled:pointer-events-none shrink-0"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        Export CSV
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-sm">
+                        <p className="text-[0.6875rem] font-bold tracking-tight text-slate-500 uppercase mb-1">Total responses</p>
+                        <div className="flex items-baseline gap-2 flex-wrap">
+                          <span className="text-3xl font-extrabold text-slate-800 tracking-tight">{filteredFeedbackSummary.total}</span>
+                          <span className="text-[10px] font-medium text-slate-400">
+                            of {feedbackData.summary.total} all-time
+                          </span>
+                        </div>
+                      </div>
+                      <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-sm">
+                        <p className="text-[0.6875rem] font-bold tracking-tight text-slate-500 uppercase mb-1">Aggregated NPS</p>
+                        <div className="flex items-baseline gap-2 flex-wrap">
+                          <span
+                            className={clsx(
+                              'text-3xl font-extrabold tracking-tight',
+                              filteredFeedbackSummary.nps == null ? 'text-slate-400' : 'text-primary-700',
+                            )}
+                          >
+                            {filteredFeedbackSummary.nps != null
+                              ? `${filteredFeedbackSummary.nps > 0 ? '+' : ''}${filteredFeedbackSummary.nps}`
+                              : '—'}
+                          </span>
+                          {npsQualityBadge && (
+                            <span
+                              className={clsx(
+                                'px-2 py-0.5 text-[10px] rounded-full font-bold',
+                                npsQualityBadge.className,
+                              )}
+                            >
+                              {npsQualityBadge.label}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[10px] text-slate-400 mt-1">Same formula as summary: (P − D) / (P + Pas + D) × 100</p>
+                      </div>
+                      <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-sm">
+                        <p className="text-[0.6875rem] font-bold tracking-tight text-slate-500 uppercase mb-1">CSAT (Freshdesk)</p>
+                        <div className="flex items-baseline gap-2">
+                          {filteredFeedbackSummary.freshdesk_csat_avg != null ? (
+                            <>
+                              <span className="text-3xl font-extrabold text-slate-800 tracking-tight">
+                                {filteredFeedbackSummary.freshdesk_csat_avg.toFixed(1)}
+                              </span>
+                              <span className="text-sm text-slate-500 font-medium">
+                                / {filteredFeedbackSummary.freshdesk_csat_scale}.0
+                              </span>
+                            </>
+                          ) : (
+                            <span className="text-lg font-semibold text-slate-400">—</span>
+                          )}
+                        </div>
+                        <p className="text-[10px] text-slate-400 mt-1">Avg. raw score in filtered Freshdesk rows</p>
+                      </div>
+                      <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-sm">
+                        <p className="text-[0.6875rem] font-bold tracking-tight text-slate-500 uppercase mb-1">Unique accounts</p>
+                        <div className="flex items-baseline gap-2">
+                          <span className="text-3xl font-extrabold text-slate-800 tracking-tight">
+                            {filteredFeedbackSummary.unique_customers}
+                          </span>
+                        </div>
                         <p className="text-[10px] text-slate-400 mt-1">
-                          {feedbackData.summary.unique_customers} accounts
-                        </p>
-                      </div>
-                      <div className="bg-white rounded-xl border border-slate-200 p-3">
-                        <p className="text-[10px] text-slate-500 uppercase font-semibold tracking-wider">NPS (proxy)</p>
-                        <p className={clsx(
-                          'text-2xl font-bold',
-                          feedbackData.summary.nps == null ? 'text-slate-400' :
-                          feedbackData.summary.nps >= 0 ? 'text-emerald-600' : 'text-rose-600'
-                        )}>
-                          {feedbackData.summary.nps != null ? `${feedbackData.summary.nps > 0 ? '+' : ''}${feedbackData.summary.nps}` : '—'}
-                        </p>
-                        <p className="text-[10px] text-slate-400 mt-1">Promoter − Detractor %</p>
-                      </div>
-                      <div className="bg-white rounded-xl border border-slate-200 p-3">
-                        <p className="text-[10px] text-slate-500 uppercase font-semibold tracking-wider">Prom / Pas / Det</p>
-                        <p className="text-lg font-bold text-slate-800">
-                          <span className="text-emerald-600">{feedbackData.summary.promoters}</span>
-                          <span className="text-slate-300 mx-1">/</span>
-                          <span className="text-amber-600">{feedbackData.summary.passives}</span>
-                          <span className="text-slate-300 mx-1">/</span>
-                          <span className="text-rose-600">{feedbackData.summary.detractors}</span>
-                        </p>
-                      </div>
-                      <div className="bg-white rounded-xl border border-slate-200 p-3">
-                        <p className="text-[10px] text-slate-500 uppercase font-semibold tracking-wider">By source</p>
-                        <p className="text-sm font-semibold text-slate-800 mt-1">
-                          Survey Monkey {feedbackData.summary.survey_monkey_count}
-                        </p>
-                        <p className="text-sm font-semibold text-slate-800">
-                          Freshdesk {feedbackData.summary.freshdesk_count}
+                          SM {filteredFeedbackSummary.survey_monkey_count} · FD {filteredFeedbackSummary.freshdesk_count}
                         </p>
                       </div>
                     </div>
 
-                    <div>
-                      <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-1">
-                        By customer
-                      </h3>
-                      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden overflow-x-auto">
-                        <table className="w-full text-sm">
+                    <section>
+                      <div className="flex justify-between items-end mb-3 px-0.5">
+                        <h3 className="text-base font-bold text-slate-800">By customer</h3>
+                      </div>
+                      <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden shadow-sm overflow-x-auto">
+                        <table className="w-full text-left min-w-[520px]">
                           <thead>
-                            <tr className="bg-slate-50 text-left text-[10px] uppercase text-slate-500 border-b border-slate-100">
-                              <th className="px-3 py-2 font-semibold">Account</th>
-                              <th className="px-3 py-2 font-semibold">Region</th>
-                              <th className="px-3 py-2 font-semibold text-right">N</th>
-                              <th className="px-3 py-2 font-semibold text-right">P / Pas / Det</th>
-                              <th className="px-3 py-2 font-semibold">Last</th>
+                            <tr className="bg-slate-50/90">
+                              <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Account</th>
+                              <th className="py-3 px-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-12">N</th>
+                              <th className="py-3 px-4 text-[10px] font-bold text-slate-500 uppercase tracking-wider text-right">Composition</th>
                             </tr>
                           </thead>
-                          <tbody className="divide-y divide-slate-50">
-                            {feedbackData.by_customer.length === 0 ? (
+                          <tbody className="divide-y divide-slate-100">
+                            {filteredByCustomer.length === 0 ? (
                               <tr>
-                                <td colSpan={5} className="px-3 py-8 text-center text-slate-400 text-sm">
-                                  No feedback rows for this CSM&apos;s accounts.
+                                <td colSpan={3} className="px-4 py-10 text-center text-slate-400 text-sm">
+                                  No rows match the current filters.
                                 </td>
                               </tr>
                             ) : (
-                              feedbackData.by_customer.map(row => (
-                                <tr key={row.customer_name} className="hover:bg-slate-50/80">
-                                  <td className="px-3 py-2 font-medium text-slate-800">{row.customer_name}</td>
-                                  <td className="px-3 py-2 text-slate-500 text-xs">{row.region || '—'}</td>
-                                  <td className="px-3 py-2 text-right tabular-nums">{row.count}</td>
-                                  <td className="px-3 py-2 text-right text-xs">
-                                    <span className="text-emerald-600">{row.promoters}</span>
-                                    {' / '}
-                                    <span className="text-amber-600">{row.passives}</span>
-                                    {' / '}
-                                    <span className="text-rose-600">{row.detractors}</span>
-                                  </td>
-                                  <td className="px-3 py-2 text-xs text-slate-500">
-                                    {row.last_response_date ? formatDate(row.last_response_date) : '—'}
-                                  </td>
-                                </tr>
-                              ))
+                              filteredByCustomer.map((row) => {
+                                const denom = row.promoters + row.passives + row.detractors || row.count || 1
+                                const pw = denom > 0 ? (row.promoters / denom) * 100 : 0
+                                const paw = denom > 0 ? (row.passives / denom) * 100 : 0
+                                const dw = denom > 0 ? (row.detractors / denom) * 100 : 0
+                                return (
+                                  <tr key={row.customer_name} className="hover:bg-slate-50/60 transition-colors">
+                                    <td className="py-4 px-4 align-top">
+                                      <p className="text-xs font-bold text-slate-800">{row.customer_name}</p>
+                                      <p className="text-[10px] text-slate-500 mt-0.5">{row.region || '—'}</p>
+                                    </td>
+                                    <td className="py-4 px-2 text-xs font-medium text-slate-700 tabular-nums align-top">{row.count}</td>
+                                    <td className="py-4 px-4 align-top">
+                                      <div className="flex h-2 w-36 ml-auto rounded-full overflow-hidden bg-slate-200">
+                                        {pw > 0 && (
+                                          <div className="bg-emerald-500 h-full shrink-0" style={{ width: `${pw}%` }} title="Promoters" />
+                                        )}
+                                        {paw > 0 && (
+                                          <div className="bg-amber-400 h-full shrink-0" style={{ width: `${paw}%` }} title="Passives" />
+                                        )}
+                                        {dw > 0 && (
+                                          <div className="bg-rose-500 h-full shrink-0" style={{ width: `${dw}%` }} title="Detractors" />
+                                        )}
+                                      </div>
+                                      <p className="text-[9px] text-right mt-1 text-slate-400">
+                                        Last: {row.last_response_date ? formatDate(row.last_response_date) : '—'}
+                                      </p>
+                                    </td>
+                                  </tr>
+                                )
+                              })
                             )}
                           </tbody>
                         </table>
                       </div>
-                    </div>
+                    </section>
 
-                    <div>
-                      <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-1">
-                        All responses (newest first)
-                      </h3>
-                      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden overflow-x-auto max-h-[420px] overflow-y-auto">
+                    <section className="space-y-4">
+                      <div className="flex justify-between items-end px-0.5">
+                        <h3 className="text-base font-bold text-slate-800">Recent feedback</h3>
+                        <div className="flex items-center gap-1 text-slate-400">
+                          <MessageCircle className="w-3.5 h-3.5" />
+                          <span className="text-[10px] font-bold uppercase tracking-wide">Verbatim</span>
+                        </div>
+                      </div>
+                      {recentVerbatimRows.length === 0 ? (
+                        <p className="text-sm text-slate-400 px-1">No verbatim text in the current filter (expand rows in the log for full SurveyMonkey / Freshdesk detail).</p>
+                      ) : (
+                        <div className="space-y-4">
+                          {recentVerbatimRows.map(({ r, text }, vidx) => {
+                            const cat = r.nps_category
+                            const border =
+                              cat === 'Promoter'
+                                ? 'border-l-emerald-500'
+                                : cat === 'Detractor'
+                                  ? 'border-l-rose-500'
+                                  : cat === 'Passive'
+                                    ? 'border-l-amber-400'
+                                    : 'border-l-slate-300'
+                            const badge = feedbackScoreBadge(r)
+                            return (
+                              <div
+                                key={`verbatim-${vidx}-${r.source}-${r.record_id}-${r.ticket_id}-${r.response_date ?? ''}`}
+                                className={clsx(
+                                  'group relative bg-white p-5 rounded-2xl border border-slate-200/90 border-l-4 shadow-sm hover:shadow transition-shadow',
+                                  border,
+                                )}
+                              >
+                                <div className="flex justify-between items-start gap-3 mb-2">
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-[10px] font-bold text-slate-600 shrink-0">
+                                      {respondentInitials(r)}
+                                    </div>
+                                    <div className="min-w-0">
+                                      <p className="text-xs font-bold text-slate-800 truncate">
+                                        {r.respondent_name || r.respondent_email || 'Respondent'}
+                                      </p>
+                                      <p className="text-[10px] text-slate-500 truncate">
+                                        {r.customer_name || '—'}
+                                        {r.region ? ` · ${r.region}` : ''}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <span className="shrink-0 px-2 py-0.5 bg-slate-100 text-slate-700 text-[10px] rounded-full font-bold max-w-[120px] truncate" title={String(badge)}>
+                                    {badge}
+                                  </span>
+                                </div>
+                                <p className="text-xs text-slate-700 leading-relaxed italic whitespace-pre-wrap break-words">&ldquo;{text}&rdquo;</p>
+                                <p className="text-[9px] mt-3 text-slate-400 text-right">
+                                  {relativeFeedbackTime(r.response_date)}
+                                  {r.response_date ? ` · ${formatDate(r.response_date)}` : ''}
+                                  {' via '}
+                                  {isSurveyMonkeySource(r.source) ? 'SurveyMonkey' : isFreshdeskSource(r.source) ? 'Freshdesk' : r.source}
+                                </p>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </section>
+
+                    <details className="group rounded-2xl border border-slate-200/90 bg-slate-50/50 overflow-hidden">
+                      <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-100/80 flex items-center justify-between">
+                        <span>Full response log</span>
+                        <span className="text-xs font-normal text-slate-400">{filteredFeedbackResponses.length} rows · newest first</span>
+                      </summary>
+                      <div className="px-2 pb-4">
+                      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden overflow-x-auto max-h-[min(420px,50vh)] overflow-y-auto mx-2">
                         <table className="w-full text-sm">
                           <thead className="sticky top-0 bg-slate-50 z-10">
                             <tr className="text-left text-[10px] uppercase text-slate-500 border-b border-slate-100">
@@ -1266,14 +1703,14 @@ export function CSMProfilePanel({ csm, isOpen, onClose }: CSMProfilePanelProps) 
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-50">
-                            {feedbackData.responses.length === 0 ? (
+                            {filteredFeedbackResponses.length === 0 ? (
                               <tr>
                                 <td colSpan={9} className="px-3 py-8 text-center text-slate-400 text-sm">
                                   No rows.
                                 </td>
                               </tr>
                             ) : (
-                              feedbackData.responses.map((r, idx) => {
+                              filteredFeedbackResponses.map((r, idx) => {
                                 const rowKey = `${r.source}-${r.record_id}-${r.ticket_id}-${idx}`
                                 const expanded = expandedFeedbackKeys.has(rowKey)
                                 const isSm = String(r.source || '').includes('Survey')
@@ -1445,7 +1882,8 @@ export function CSMProfilePanel({ csm, isOpen, onClose }: CSMProfilePanelProps) 
                           </tbody>
                         </table>
                       </div>
-                    </div>
+                      </div>
+                    </details>
                   </>
                 )}
               </div>
