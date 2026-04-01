@@ -145,7 +145,8 @@ function filterFeedbackResponses(
     if (source === 'freshdesk' && !isFreshdeskSource(r.source)) return false
     if (start) {
       const rd = parseResponseDate(r.response_date)
-      if (!rd || rd < start) return false
+      // Missing/unparseable dates: keep row so date filters do not hide all data
+      if (rd != null && rd < start) return false
     }
     return true
   })
@@ -256,14 +257,23 @@ function npsQualityLabel(nps: number | null): { label: string; className: string
 }
 
 function feedbackScoreBadge(r: CSMFeedbackResponseRow): string {
+  if (r.rating_label?.trim()) return r.rating_label.trim()
   if (r.raw_score != null && !Number.isNaN(Number(r.raw_score))) {
     const n = Number(r.raw_score)
-    const scale = n > 5 ? 10 : 5
-    return `${n} / ${scale}`
+    // Only treat as Likert-style score (avoid showing ticket IDs etc. as "103 / 10")
+    if (n >= 0 && n <= 10) return `${n} / 10`
+    if (n >= 0 && n <= 5) return `${n} / 5`
   }
-  if (r.rating_label?.trim()) return r.rating_label.trim()
   if (r.nps_category) return r.nps_category
   return '—'
+}
+
+function surveyMonkeyTypeLabel(r: CSMFeedbackResponseRow): string {
+  const st = r.response_status?.trim()
+  if (st) return st
+  const src = String(r.source || '').trim()
+  if (src && src !== 'SurveyMonkey') return src
+  return 'Survey response'
 }
 
 function extractVerbatim(r: CSMFeedbackResponseRow): string | null {
@@ -342,6 +352,276 @@ function exportFeedbackCsv(rows: CSMFeedbackResponseRow[], filenameBase: string)
   a.download = `${filenameBase}-feedback.csv`
   a.click()
   URL.revokeObjectURL(url)
+}
+
+function feedbackCardCollapsedHint(
+  r: CSMFeedbackResponseRow,
+  previewText: string | null,
+  isFd: boolean,
+  isSm: boolean,
+): string {
+  if (isFd && r.ticket_id != null) {
+    const t = String(r.ticket_id)
+    const subj = r.ticket_subject && String(r.ticket_subject).trim()
+    if (subj) return `Ticket #${t} · ${feedbackPreview(subj, 72)}`
+    return `Ticket #${t}`
+  }
+  if (isSm && r.survey_questions && r.survey_questions.length > 0) {
+    const n = r.survey_questions.length
+    const st = surveyMonkeyTypeLabel(r)
+    return `${st} · ${n} question${n > 1 ? 's' : ''}`
+  }
+  if (previewText?.trim()) return feedbackPreview(previewText, 100)
+  return 'Expand for full details'
+}
+
+function FeedbackVerbatimCard({
+  r,
+  previewText,
+}: {
+  r: CSMFeedbackResponseRow
+  previewText: string | null
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const cat = r.nps_category
+  const border =
+    cat === 'Promoter'
+      ? 'border-l-emerald-500'
+      : cat === 'Detractor'
+        ? 'border-l-rose-500'
+        : cat === 'Passive'
+          ? 'border-l-amber-400'
+          : 'border-l-slate-300'
+  const badge = feedbackScoreBadge(r)
+  const isFd = isFreshdeskSource(r.source)
+  const isSm = isSurveyMonkeySource(r.source)
+  const hasFullFd = Boolean(r.csat_entries && r.csat_entries.length > 0)
+  const hasFullSm = Boolean(r.survey_questions && r.survey_questions.length > 0)
+  const previewDupesFeedback =
+    isFd &&
+    Boolean(r.feedback?.trim()) &&
+    previewText != null &&
+    previewText.trim() === r.feedback!.trim()
+  const showItalicPreview =
+    Boolean(previewText?.trim()) &&
+    !((isFd && hasFullFd) || (isSm && hasFullSm)) &&
+    !previewDupesFeedback
+
+  const collapsedHint = feedbackCardCollapsedHint(r, previewText, isFd, isSm)
+
+  return (
+    <div
+      className={clsx(
+        'group relative bg-white rounded-xl border border-slate-200/90 border-l-4 shadow-sm transition-shadow',
+        border,
+        expanded && 'shadow-md ring-1 ring-slate-200/80',
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => setExpanded((e) => !e)}
+        aria-expanded={expanded}
+        className="w-full text-left p-3 rounded-xl hover:bg-slate-50/90 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 focus-visible:ring-offset-1"
+      >
+        <div className="flex justify-between items-start gap-2">
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
+            {isFd && (
+              <span className="px-2 py-0.5 rounded-md bg-sky-100 text-sky-900 text-[10px] font-bold uppercase tracking-wide">
+                Freshdesk
+              </span>
+            )}
+            {isSm && (
+              <span className="px-2 py-0.5 rounded-md bg-violet-100 text-violet-900 text-[10px] font-bold uppercase tracking-wide">
+                SurveyMonkey
+              </span>
+            )}
+            {!isFd && !isSm && (
+              <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-bold uppercase tracking-wide truncate max-w-[200px]">
+                {r.source || 'Feedback'}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span
+              className="px-2 py-0.5 bg-slate-100 text-slate-700 text-[10px] rounded-full font-bold max-w-[120px] truncate text-right"
+              title={badge}
+            >
+              {badge}
+            </span>
+            {expanded ? (
+              <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" aria-hidden />
+            ) : (
+              <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" aria-hidden />
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-start gap-2 mt-2">
+          <div className="w-7 h-7 rounded-full bg-slate-100 flex items-center justify-center text-[9px] font-bold text-slate-600 shrink-0">
+            {respondentInitials(r)}
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-bold text-slate-800 truncate">
+              {r.respondent_name || r.respondent_email || 'Respondent'}
+            </p>
+            <p className="text-[10px] text-slate-500 truncate">
+              {r.customer_name || '—'}
+              {r.region ? ` · ${r.region}` : ''}
+            </p>
+          </div>
+        </div>
+
+        {!expanded && (
+          <p className="text-[11px] text-slate-600 mt-2 line-clamp-2 leading-snug">{collapsedHint}</p>
+        )}
+
+        <div className="flex flex-wrap items-center justify-between gap-2 mt-2 pt-2 border-t border-slate-100/80">
+          <p className="text-[9px] text-slate-400">
+            {relativeFeedbackTime(r.response_date)}
+            {r.response_date ? ` · ${formatDate(r.response_date)}` : ''}
+          </p>
+          {r.drill_url && (
+            <span
+              className="text-[9px] font-semibold text-primary-600"
+              onClick={(ev) => ev.stopPropagation()}
+            >
+              <a
+                href={r.drill_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-0.5 hover:underline"
+                onClick={(ev) => ev.stopPropagation()}
+              >
+                {r.drill_label || 'Open'}
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            </span>
+          )}
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="px-3 pb-3 border-t border-slate-100">
+          <div className="max-h-[min(50vh,380px)] overflow-y-auto overscroll-contain pr-1 pt-3 space-y-3">
+            {isFd && (
+              <div className="rounded-lg bg-slate-50 border border-slate-200/80 px-3 py-2 text-[11px] text-slate-700 space-y-1">
+                <p className="font-semibold text-slate-800">
+                  {r.ticket_id != null && r.ticket_id !== ''
+                    ? (
+                      <>
+                        Ticket <span className="tabular-nums font-mono text-primary-700">#{String(r.ticket_id)}</span>
+                      </>
+                    )
+                    : (
+                      <span>Ticket (no id)</span>
+                    )}
+                </p>
+                {(r.ticket_subject != null && String(r.ticket_subject).trim()) && (
+                  <p>
+                    <span className="text-slate-500">Subject</span>{' '}
+                    <span className="text-slate-800">{String(r.ticket_subject)}</span>
+                  </p>
+                )}
+                {(r.ticket_status != null && String(r.ticket_status).trim()) && (
+                  <p>
+                    <span className="text-slate-500">Status</span>{' '}
+                    <span>{String(r.ticket_status)}</span>
+                  </p>
+                )}
+              </div>
+            )}
+
+            {isSm && (
+              <div className="rounded-lg bg-slate-50 border border-slate-200/80 px-3 py-2 text-[11px]">
+                <p className="text-slate-500 font-medium uppercase text-[10px] tracking-wide mb-0.5">Survey type</p>
+                <p className="text-slate-800 font-medium leading-snug">{surveyMonkeyTypeLabel(r)}</p>
+              </div>
+            )}
+
+            {showItalicPreview && (
+              <p className="text-xs text-slate-600 leading-relaxed italic whitespace-pre-wrap break-words">
+                &ldquo;{previewText}&rdquo;
+              </p>
+            )}
+
+            {isFd && (r.csat_entries && r.csat_entries.length > 0 ? (
+              <div className="space-y-3">
+                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">All CSAT answers for this ticket</p>
+                {r.csat_entries.map((c, idx) => (
+                  <div
+                    key={idx}
+                    className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px] space-y-1"
+                  >
+                    <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-slate-700">
+                      {c.label && <span className="font-semibold text-slate-800">{c.label}</span>}
+                      {c.rating_label && (
+                        <span className="text-slate-600">{c.rating_label}</span>
+                      )}
+                      {c.value != null && (
+                        <span className="tabular-nums text-slate-500">value: {c.value}</span>
+                      )}
+                      {c.nps_category && (
+                        <span
+                          className={clsx(
+                            'font-semibold',
+                            c.nps_category === 'Promoter' && 'text-emerald-600',
+                            c.nps_category === 'Passive' && 'text-amber-600',
+                            c.nps_category === 'Detractor' && 'text-rose-600',
+                          )}
+                        >
+                          {c.nps_category}
+                        </span>
+                      )}
+                      {c.response_date && (
+                        <span className="text-slate-400">{formatDate(c.response_date)}</span>
+                      )}
+                    </div>
+                    {c.feedback && c.feedback.trim() && (
+                      <p className="text-xs text-slate-800 whitespace-pre-wrap break-words pt-1 border-t border-slate-100">
+                        {c.feedback}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : isFd && r.feedback && r.feedback.trim() ? (
+              <div className="rounded-lg border border-slate-200 bg-slate-50/50 px-3 py-2">
+                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1">Feedback</p>
+                <p className="text-xs text-slate-800 whitespace-pre-wrap break-words">{r.feedback}</p>
+              </div>
+            ) : null)}
+
+            {isSm && r.survey_questions && r.survey_questions.length > 0 && (
+              <div className="space-y-3">
+                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">All survey questions &amp; answers</p>
+                {r.survey_questions.map((qa, idx) => (
+                  <div key={idx} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px]">
+                    <p className="font-semibold text-slate-700">{qa.question || `Question ${idx + 1}`}</p>
+                    <p className="text-sm text-slate-800 mt-1 whitespace-pre-wrap break-words">{qa.answer || '—'}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 text-[9px] text-slate-500">
+              <span>{isFd ? 'Freshdesk' : isSm ? 'SurveyMonkey' : r.source}</span>
+              {r.drill_url && (
+                <a
+                  href={r.drill_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-primary-600 hover:text-primary-700 font-semibold"
+                >
+                  {r.drill_label || 'Open'}
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function ProfileStatCard({ 
@@ -1094,7 +1374,7 @@ export function CSMProfilePanel({ csm, isOpen, onClose }: CSMProfilePanelProps) 
   const [hoveredChartIdx, setHoveredChartIdx] = useState<number | null>(null)
   const [statusFilter, setStatusFilter] = useState<string | null>(null)
   const [expandedFeedbackKeys, setExpandedFeedbackKeys] = useState<Set<string>>(() => new Set())
-  const [feedbackDatePreset, setFeedbackDatePreset] = useState<FeedbackDatePreset>('90d')
+  const [feedbackDatePreset, setFeedbackDatePreset] = useState<FeedbackDatePreset>('all')
   const [feedbackSourceFilter, setFeedbackSourceFilter] = useState<FeedbackSourceFilter>('all')
 
   const { data: profile, isLoading: profileLoading, isError: profileError } = useCSMProfile(isOpen ? csm.id : null)
@@ -1106,7 +1386,7 @@ export function CSMProfilePanel({ csm, isOpen, onClose }: CSMProfilePanelProps) 
 
   useEffect(() => {
     setExpandedFeedbackKeys(new Set())
-    setFeedbackDatePreset('90d')
+    setFeedbackDatePreset('all')
     setFeedbackSourceFilter('all')
   }, [csm.id, isOpen])
 
@@ -1156,15 +1436,23 @@ export function CSMProfilePanel({ csm, isOpen, onClose }: CSMProfilePanelProps) 
   )
 
   const recentVerbatimRows = useMemo(() => {
-    const withText = filteredFeedbackResponses
-      .map((r) => ({ r, text: extractVerbatim(r) }))
-      .filter((x) => x.text && x.text.trim().length > 0)
-    withText.sort((a, b) => {
+    const scored = filteredFeedbackResponses.map((r) => ({
+      r,
+      text: extractVerbatim(r),
+    }))
+    const keep = scored.filter(({ r, text }) => {
+      if (text && text.trim().length > 0) return true
+      if (isFreshdeskSource(r.source) && (r.ticket_id != null || (r.csat_entries && r.csat_entries.length > 0)))
+        return true
+      if (isSurveyMonkeySource(r.source) && r.survey_questions && r.survey_questions.length > 0) return true
+      return false
+    })
+    keep.sort((a, b) => {
       const ta = parseResponseDate(a.r.response_date)?.getTime() ?? 0
       const tb = parseResponseDate(b.r.response_date)?.getTime() ?? 0
       return tb - ta
     })
-    return withText.slice(0, 8)
+    return keep.slice(0, 8)
   }, [filteredFeedbackResponses])
 
   const npsQualityBadge = useMemo(
@@ -1189,12 +1477,7 @@ export function CSMProfilePanel({ csm, isOpen, onClose }: CSMProfilePanelProps) 
     <>
       <div className="fixed inset-0 top-[57px] bg-black/20 z-40 transition-opacity" onClick={onClose} />
 
-      <div
-        className={clsx(
-          'fixed right-0 top-[57px] bottom-0 w-full bg-white shadow-2xl z-50 overflow-hidden flex flex-col animate-slide-in-right',
-          activeTab === 'feedback' ? 'max-w-6xl' : 'max-w-5xl',
-        )}
-      >
+      <div className="fixed right-0 top-[57px] bottom-0 w-full max-w-5xl bg-white shadow-2xl z-50 overflow-hidden flex flex-col animate-slide-in-right">
         {/* Header */}
         <div className={clsx(
           'px-6 py-4 border-b flex items-start justify-between',
@@ -1450,7 +1733,8 @@ export function CSMProfilePanel({ csm, isOpen, onClose }: CSMProfilePanelProps) 
                   <span className="font-medium text-slate-600">dim_customers</span>. Configure{' '}
                   <code className="text-[10px] bg-slate-100 px-1 rounded font-mono">FRESHDESK_PORTAL_BASE</code> and{' '}
                   <code className="text-[10px] bg-slate-100 px-1 rounded font-mono">SURVEY_MONKEY_RESPONSE_URL_TEMPLATE</code>{' '}
-                  for ticket/survey links. Filters below apply to KPIs, the table, verbatim, export, and the full log.
+                  for ticket/survey links. By default, filters show <span className="font-medium text-slate-600">all time</span> and{' '}
+                  <span className="font-medium text-slate-600">both SurveyMonkey and Freshdesk</span>; narrow the dropdowns if needed.
                 </p>
 
                 {feedbackData && (
@@ -1463,10 +1747,10 @@ export function CSMProfilePanel({ csm, isOpen, onClose }: CSMProfilePanelProps) 
                           onChange={(e) => setFeedbackDatePreset(e.target.value as FeedbackDatePreset)}
                           className="w-full pl-10 pr-3 py-2.5 bg-slate-50 border border-slate-200/80 rounded-xl text-xs font-medium text-slate-700 focus:ring-2 focus:ring-primary-500/20 focus:border-primary-300"
                         >
+                          <option value="all">All time</option>
                           <option value="90d">Last 90 days</option>
                           <option value="6m">Last 6 months</option>
                           <option value="ytd">Year to date</option>
-                          <option value="all">All time</option>
                         </select>
                       </div>
                       <div className="flex-1 relative min-w-0">
@@ -1476,9 +1760,9 @@ export function CSMProfilePanel({ csm, isOpen, onClose }: CSMProfilePanelProps) 
                           onChange={(e) => setFeedbackSourceFilter(e.target.value as FeedbackSourceFilter)}
                           className="w-full pl-10 pr-3 py-2.5 bg-slate-50 border border-slate-200/80 rounded-xl text-xs font-medium text-slate-700 focus:ring-2 focus:ring-primary-500/20 focus:border-primary-300"
                         >
-                          <option value="all">All sources</option>
-                          <option value="survey">SurveyMonkey</option>
-                          <option value="freshdesk">Freshdesk</option>
+                          <option value="all">SurveyMonkey + Freshdesk</option>
+                          <option value="survey">SurveyMonkey only</option>
+                          <option value="freshdesk">Freshdesk only</option>
                         </select>
                       </div>
                       <button
@@ -1626,57 +1910,18 @@ export function CSMProfilePanel({ csm, isOpen, onClose }: CSMProfilePanelProps) 
                         </div>
                       </div>
                       {recentVerbatimRows.length === 0 ? (
-                        <p className="text-sm text-slate-400 px-1">No verbatim text in the current filter (expand rows in the log for full SurveyMonkey / Freshdesk detail).</p>
+                        <p className="text-sm text-slate-400 px-1">
+                          No recent feedback in the current filter. Try widening date/source filters or use the full response log below.
+                        </p>
                       ) : (
                         <div className="space-y-4">
-                          {recentVerbatimRows.map(({ r, text }, vidx) => {
-                            const cat = r.nps_category
-                            const border =
-                              cat === 'Promoter'
-                                ? 'border-l-emerald-500'
-                                : cat === 'Detractor'
-                                  ? 'border-l-rose-500'
-                                  : cat === 'Passive'
-                                    ? 'border-l-amber-400'
-                                    : 'border-l-slate-300'
-                            const badge = feedbackScoreBadge(r)
-                            return (
-                              <div
-                                key={`verbatim-${vidx}-${r.source}-${r.record_id}-${r.ticket_id}-${r.response_date ?? ''}`}
-                                className={clsx(
-                                  'group relative bg-white p-5 rounded-2xl border border-slate-200/90 border-l-4 shadow-sm hover:shadow transition-shadow',
-                                  border,
-                                )}
-                              >
-                                <div className="flex justify-between items-start gap-3 mb-2">
-                                  <div className="flex items-center gap-2 min-w-0">
-                                    <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-[10px] font-bold text-slate-600 shrink-0">
-                                      {respondentInitials(r)}
-                                    </div>
-                                    <div className="min-w-0">
-                                      <p className="text-xs font-bold text-slate-800 truncate">
-                                        {r.respondent_name || r.respondent_email || 'Respondent'}
-                                      </p>
-                                      <p className="text-[10px] text-slate-500 truncate">
-                                        {r.customer_name || '—'}
-                                        {r.region ? ` · ${r.region}` : ''}
-                                      </p>
-                                    </div>
-                                  </div>
-                                  <span className="shrink-0 px-2 py-0.5 bg-slate-100 text-slate-700 text-[10px] rounded-full font-bold max-w-[120px] truncate" title={String(badge)}>
-                                    {badge}
-                                  </span>
-                                </div>
-                                <p className="text-xs text-slate-700 leading-relaxed italic whitespace-pre-wrap break-words">&ldquo;{text}&rdquo;</p>
-                                <p className="text-[9px] mt-3 text-slate-400 text-right">
-                                  {relativeFeedbackTime(r.response_date)}
-                                  {r.response_date ? ` · ${formatDate(r.response_date)}` : ''}
-                                  {' via '}
-                                  {isSurveyMonkeySource(r.source) ? 'SurveyMonkey' : isFreshdeskSource(r.source) ? 'Freshdesk' : r.source}
-                                </p>
-                              </div>
-                            )
-                          })}
+                          {recentVerbatimRows.map(({ r, text }, vidx) => (
+                            <FeedbackVerbatimCard
+                              key={`verbatim-${vidx}-${r.source}-${r.record_id}-${r.ticket_id}-${r.response_date ?? ''}`}
+                              r={r}
+                              previewText={text}
+                            />
+                          ))}
                         </div>
                       )}
                     </section>
