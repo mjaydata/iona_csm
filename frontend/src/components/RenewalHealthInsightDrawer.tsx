@@ -1,6 +1,5 @@
 import { useEffect, useState, useMemo } from 'react'
 import { X, Loader2, AlertCircle, Sparkles } from 'lucide-react'
-import { clsx } from 'clsx'
 import { useRenewalHealthInsight } from '../hooks/useAccounts'
 
 interface RenewalHealthInsightDrawerProps {
@@ -52,22 +51,21 @@ export function RenewalHealthInsightDrawer({
     return Math.max(...sortedContracts.map((c) => c.arr_eur), 1)
   }, [sortedContracts])
 
+  // Do not mount fixed panels when closed. AccountTable renders one instance per row;
+  // dozens of off-screen fixed + shadow-2xl layers caused a dark vertical band on the right.
+  if (!isOpen) {
+    return null
+  }
+
   return (
     <>
-      {isOpen && (
-        <div
-          className="fixed inset-0 bg-black/20 z-40 transition-opacity"
-          onClick={onClose}
-          aria-hidden
-        />
-      )}
-
       <div
-        className={clsx(
-          'fixed top-0 right-0 h-full w-[420px] max-w-[94vw] bg-white shadow-2xl z-50 flex flex-col transition-transform duration-300 ease-out',
-          isOpen ? 'translate-x-0' : 'translate-x-full'
-        )}
-      >
+        className="fixed inset-0 bg-black/20 z-40 transition-opacity"
+        onClick={onClose}
+        aria-hidden
+      />
+
+      <div className="fixed top-0 right-0 h-full w-[420px] max-w-[94vw] bg-white z-50 flex flex-col shadow-xl shadow-slate-900/10">
         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 flex-shrink-0">
           <div>
             <h2 className="text-sm font-semibold text-slate-800">Renewals &amp; health score</h2>
