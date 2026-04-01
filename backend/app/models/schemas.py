@@ -47,6 +47,32 @@ class HealthScoreHistoryResponse(BaseModel):
     history: List[HealthScoreHistoryPoint] = []
 
 
+class RenewalContractLine(BaseModel):
+    """One open renewal line from fct_contracts (materiality context)."""
+    revenue_type: str
+    arr_eur: float = 0.0
+    renewal_date: Optional[date] = None
+    renewal_days: Optional[int] = None
+    contract_group: Optional[str] = None
+
+
+class RenewalHealthInsightResponse(BaseModel):
+    """Renewal-weighted health context + optional LLM narrative for CSMs."""
+    account_id: str
+    account_name: str
+    contracts: List[RenewalContractLine] = []
+    nearest_renewal_days: Optional[int] = None
+    base_renewal_deduction: int = 0
+    adjusted_renewal_deduction: int = 0
+    materiality_weight: float = 1.0
+    near_term_arr_eur: float = 0.0
+    nearest_line_arr_eur: float = 0.0
+    share_of_near_term: float = 0.0
+    deterministic_explanation: str = ""
+    llm_narrative: Optional[str] = None
+    scoring_version: str = "renewal-materiality-v1"
+
+
 class AccountMovement(BaseModel):
     """An account that changed health category between two days."""
     account_id: str

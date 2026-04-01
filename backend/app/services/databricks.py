@@ -43,6 +43,8 @@ from ..models.schemas import (
     HealthScore,
     HealthScoreFactor,
     HealthScoreDetail,
+    RenewalContractLine,
+    RenewalHealthInsightResponse,
     HumanNote,
     MeetingBrief,
     MetricsSummary,
@@ -360,12 +362,278 @@ class DatabricksService:
         else:
             return AccountStatus.STABLE
 
+    def _tier_renewal_deduction_days(self, renewal_days: Optional[int]) -> Tuple[int, str]:
+        """Raw renewal risk deduction (max 25) from days to nearest renewal."""
+        if renewal_days is not None and renewal_days < 999:
+            if renewal_days <= 30:
+                return 25, f"{renewal_days} days away (critical)"
+            if renewal_days <= 60:
+                return 18, f"{renewal_days} days away (urgent)"
+            if renewal_days <= 90:
+                return 12, f"{renewal_days} days away (soon)"
+            if renewal_days <= 180:
+                return 5, f"{renewal_days} days away"
+            return 0, f"{renewal_days}+ days away"
+        return 0, "No upcoming renewal"
+
+    def _materiality_renewal_adjustment(
+        self, base_deduction: int, lines: List[dict]
+    ) -> Tuple[int, str, dict]:
+        """
+        Reduce renewal deduction when the nearest renewal is a small share of
+        near-term renewal ARR (e.g. $50k tail vs $1M core in the same window).
+        """
+        meta: dict = {
+            "base_deduction": base_deduction,
+            "nearest_days": None,
+            "nearest_arr_eur": 0.0,
+            "near_term_arr_eur": 0.0,
+            "share_of_near_term": 0.0,
+            "weight": 1.0,
+        }
+        if not lines or base_deduction == 0:
+            return base_deduction, "", meta
+
+        near = [
+            L
+            for L in lines
+            if L.get("renewal_days") is not None and 0 <= int(L["renewal_days"]) <= 365
+        ]
+        total_near = sum(float(L.get("arr_eur") or 0) for L in near)
+        if total_near <= 0:
+            total_near = 1.0
+
+        valid = [L for L in lines if L.get("renewal_days") is not None and int(L["renewal_days"]) < 999]
+        if not valid:
+            return base_deduction, "", meta
+        nearest = min(valid, key=lambda x: int(x["renewal_days"]))
+        n_arr = float(nearest.get("arr_eur") or 0)
+        share = n_arr / total_near if total_near > 0 else 1.0
+        # Weight: full deduction when nearest line is most of near-term book; scale down tail renewals
+        weight = max(0.15, min(1.0, share * 2.0))
+        if share < 0.10 and base_deduction >= 12:
+            weight = min(weight, 0.35)
+        adjusted = int(round(base_deduction * weight))
+        adjusted = max(0, min(25, adjusted))
+        rt = str(nearest.get("revenue_type") or "")
+        detail = (
+            f"Nearest renewal in {int(nearest['renewal_days'])}d ({rt}), "
+            f"€{n_arr:,.0f} ≈ {share*100:.0f}% of €{total_near:,.0f} near-term renewal ARR — "
+            f"deduction scaled ({base_deduction} → {adjusted}) so small contracts don't dominate the score."
+        )
+        meta.update(
+            {
+                "nearest_days": int(nearest["renewal_days"]),
+                "nearest_arr_eur": n_arr,
+                "near_term_arr_eur": total_near,
+                "share_of_near_term": round(share, 4),
+                "weight": round(weight, 3),
+            }
+        )
+        return adjusted, detail, meta
+
+    def get_renewal_contract_lines_for_account(self, account_id: str) -> List[dict]:
+        """Open renewal contract rows for materiality-weighted health (same filters as portfolio ARR)."""
+        FCT_TABLE = "silver.silver_layer.fct_contracts"
+        safe = self._sql_escape(account_id)
+        rows: List[dict] = []
+        try:
+            with self.get_connection() as conn:
+                if conn is None:
+                    return []
+                cur = conn.cursor()
+                cur.execute(
+                    f"""
+                    SELECT
+                        COALESCE(revenue_type, '') AS revenue_type,
+                        COALESCE(ARR_EUR, 0) AS arr_eur,
+                        TRY_CAST(rev_rec_end_date AS DATE) AS renewal_date,
+                        DATEDIFF(TRY_CAST(rev_rec_end_date AS DATE), CURRENT_DATE()) AS renewal_days,
+                        COALESCE(CONTRACT_GROUP, '') AS contract_group
+                    FROM {FCT_TABLE}
+                    WHERE account_id = '{safe}'
+                      AND RENEWAL_NOT_YET_CONTRACTED = 'Y'
+                      AND revenue_type NOT IN ('Services', 'Perpetual')
+                      AND churn_expected_occurred = 'nan'
+                      AND TRY_CAST(rev_rec_end_date AS DATE) > CURRENT_DATE()
+                    ORDER BY renewal_days ASC
+                    """
+                )
+                for r in cur.fetchall() or []:
+                    rd = r[3]
+                    try:
+                        rd_int = int(rd) if rd is not None else None
+                    except (TypeError, ValueError):
+                        rd_int = None
+                    rows.append(
+                        {
+                            "revenue_type": str(r[0] or ""),
+                            "arr_eur": float(r[1] or 0),
+                            "renewal_date": r[2],
+                            "renewal_days": rd_int,
+                            "contract_group": str(r[4] or ""),
+                        }
+                    )
+                cur.close()
+        except Exception as e:
+            logger.warning(f"get_renewal_contract_lines_for_account: {e}")
+            return []
+        return rows
+
+    def _llm_renewal_narrative(self, payload: dict) -> Optional[str]:
+        """Optional Databricks ai_query narrative for CSM-facing explanation."""
+        import json
+
+        try:
+            body = json.dumps(payload, default=str)[:10000]
+            body_esc = body.replace("'", "''")
+            model = os.environ.get(
+                "DATABRICKS_LLM_MODEL", "databricks-meta-llama-3-1-70b-instruct"
+            )
+            with self.get_connection() as conn:
+                if conn is None:
+                    return None
+                cur = conn.cursor()
+                prompt = (
+                    "You are a customer success coach. Using only the JSON facts below, "
+                    "write 2-4 short sentences for a CSM: explain renewal risk in calm language, "
+                    "mention materiality (large vs small renewals) when relevant, and one practical focus. "
+                    "No markdown, no bullet points. JSON: "
+                ) + body_esc
+                sql = f"SELECT ai_query('{model}', '{prompt}')"
+                cur.execute(sql)
+                row = cur.fetchone()
+                cur.close()
+                if row and row[0]:
+                    return str(row[0]).strip()
+        except Exception as e:
+            logger.warning(f"_llm_renewal_narrative: {e}")
+        return None
+
+    def _coerce_sql_date(self, val: Any) -> Optional[date]:
+        if val is None:
+            return None
+        if isinstance(val, date) and not isinstance(val, datetime):
+            return val
+        if isinstance(val, datetime):
+            return val.date()
+        try:
+            return date.fromisoformat(str(val)[:10])
+        except (ValueError, TypeError):
+            return None
+
+    def get_renewal_health_insight(
+        self,
+        account_id: str,
+        account_name: str,
+        renewal_days_dim: Optional[int],
+        with_llm: bool = False,
+    ) -> RenewalHealthInsightResponse:
+        """Contract-level renewal context, materiality-adjusted deduction, optional LLM."""
+        lines = self.get_renewal_contract_lines_for_account(account_id)
+        rd_eff: Optional[int] = renewal_days_dim
+        if lines:
+            valid_rd = [
+                int(L["renewal_days"])
+                for L in lines
+                if L.get("renewal_days") is not None and int(L["renewal_days"]) < 999
+            ]
+            if valid_rd:
+                rd_eff = min(valid_rd)
+
+        base_ded, base_lbl = self._tier_renewal_deduction_days(rd_eff)
+        adjusted = base_ded
+        det = base_lbl
+        weight = 1.0
+        near_term = 0.0
+        nearest_arr = 0.0
+        share = 0.0
+        meta: dict = {}
+
+        if lines and base_ded > 0:
+            adjusted, mat_detail, meta = self._materiality_renewal_adjustment(base_ded, lines)
+            det = mat_detail if mat_detail else base_lbl
+            weight = float(meta.get("weight") or 1.0)
+            near_term = float(meta.get("near_term_arr_eur") or 0.0)
+            nearest_arr = float(meta.get("nearest_arr_eur") or 0.0)
+            share = float(meta.get("share_of_near_term") or 0.0)
+        elif lines:
+            near = [
+                L
+                for L in lines
+                if L.get("renewal_days") is not None and 0 <= int(L["renewal_days"]) <= 365
+            ]
+            near_term = sum(float(L.get("arr_eur") or 0) for L in near)
+            valid = [L for L in lines if L.get("renewal_days") is not None and int(L["renewal_days"]) < 999]
+            if valid:
+                nearest = min(valid, key=lambda x: int(x["renewal_days"]))
+                nearest_arr = float(nearest.get("arr_eur") or 0)
+                total_denom = near_term if near_term > 0 else max(nearest_arr, 1.0)
+                share = nearest_arr / total_denom if total_denom > 0 else 0.0
+            if not det:
+                det = base_lbl
+
+        contracts: List[RenewalContractLine] = []
+        for L in lines:
+            contracts.append(
+                RenewalContractLine(
+                    revenue_type=str(L.get("revenue_type") or ""),
+                    arr_eur=float(L.get("arr_eur") or 0),
+                    renewal_date=self._coerce_sql_date(L.get("renewal_date")),
+                    renewal_days=L.get("renewal_days"),
+                    contract_group=(L.get("contract_group") or None) or None,
+                )
+            )
+
+        nearest_days_out: Optional[int] = None
+        if rd_eff is not None and rd_eff < 999:
+            nearest_days_out = int(rd_eff)
+
+        llm: Optional[str] = None
+        if with_llm:
+            payload = {
+                "account_name": account_name,
+                "nearest_renewal_days": nearest_days_out,
+                "base_renewal_deduction": base_ded,
+                "adjusted_renewal_deduction": adjusted,
+                "materiality_weight": weight,
+                "near_term_arr_eur": near_term,
+                "nearest_line_arr_eur": nearest_arr,
+                "share_of_near_term": share,
+                "deterministic_explanation": det,
+                "contract_lines": [
+                    {
+                        "revenue_type": c.revenue_type,
+                        "arr_eur": c.arr_eur,
+                        "renewal_days": c.renewal_days,
+                    }
+                    for c in contracts[:30]
+                ],
+            }
+            llm = self._llm_renewal_narrative(payload)
+
+        return RenewalHealthInsightResponse(
+            account_id=account_id,
+            account_name=account_name,
+            contracts=contracts,
+            nearest_renewal_days=nearest_days_out,
+            base_renewal_deduction=base_ded,
+            adjusted_renewal_deduction=adjusted,
+            materiality_weight=weight,
+            near_term_arr_eur=near_term,
+            nearest_line_arr_eur=nearest_arr,
+            share_of_near_term=share,
+            deterministic_explanation=det,
+            llm_narrative=llm,
+        )
+
     def calculate_health_score_detail(
         self,
         account_name: str,
         renewal_days: Optional[int],
         pendo_data: Optional[dict] = None,
         freshdesk_data: Optional[dict] = None,
+        account_id: Optional[str] = None,
     ) -> HealthScoreDetail:
         """
         Calculate comprehensive health score with detailed breakdown.
@@ -391,30 +659,31 @@ class DatabricksService:
         has_freshdesk = False
         
         # ═══════════════════════════════════════════════════════════════
-        # 1. CONTRACT RENEWAL (max 25 point deduction)
+        # 1. CONTRACT RENEWAL (max 25 point deduction, materiality-adjusted)
         # ═══════════════════════════════════════════════════════════════
         renewal_deduction = 0
         renewal_detail = ""
-        
-        if renewal_days is not None and renewal_days < 999:
-            if renewal_days <= 30:
-                renewal_deduction = 25
-                renewal_detail = f"{renewal_days} days away (critical)"
-            elif renewal_days <= 60:
-                renewal_deduction = 18
-                renewal_detail = f"{renewal_days} days away (urgent)"
-            elif renewal_days <= 90:
-                renewal_deduction = 12
-                renewal_detail = f"{renewal_days} days away (soon)"
-            elif renewal_days <= 180:
-                renewal_deduction = 5
-                renewal_detail = f"{renewal_days} days away"
-            else:
-                renewal_deduction = 0
-                renewal_detail = f"{renewal_days}+ days away"
+        renewal_lines: List[dict] = []
+        if account_id:
+            renewal_lines = self.get_renewal_contract_lines_for_account(account_id)
+        rd_eff = renewal_days
+        if renewal_lines:
+            valid_rd = [
+                int(L["renewal_days"])
+                for L in renewal_lines
+                if L.get("renewal_days") is not None and int(L["renewal_days"]) < 999
+            ]
+            if valid_rd:
+                rd_eff = min(valid_rd)
+        base_ded, base_lbl = self._tier_renewal_deduction_days(rd_eff)
+        if renewal_lines and base_ded > 0:
+            renewal_deduction, mat_detail, _meta = self._materiality_renewal_adjustment(
+                base_ded, renewal_lines
+            )
+            renewal_detail = mat_detail if mat_detail else base_lbl
         else:
-            renewal_deduction = 0
-            renewal_detail = "No upcoming renewal"
+            renewal_deduction = base_ded
+            renewal_detail = base_lbl
         
         factors.append(HealthScoreFactor(
             name="Contract Renewal",
@@ -556,7 +825,7 @@ class DatabricksService:
             factors=factors,
             has_pendo=has_pendo,
             has_freshdesk=has_freshdesk,
-            scoring_version="rule-based-v1.2"
+            scoring_version="rule-based-v1.3"
         )
 
     def _get_precomputed_health_scores(self, conn) -> dict:
@@ -2710,6 +2979,7 @@ class DatabricksService:
                             renewal_days=renewal_days,
                             pendo_data=pendo_metrics_batch.get(name),
                             freshdesk_data=freshdesk_metrics_batch.get(name),
+                            account_id=account_id,
                         )
                     health = health_detail.category
                     
@@ -2780,9 +3050,10 @@ class DatabricksService:
                 raise Exception(f"Failed to fetch accounts: {str(e)}")
 
     def get_health_score_detail_for_account(
-        self, 
-        account_name: str, 
-        renewal_days: Optional[int]
+        self,
+        account_name: str,
+        renewal_days: Optional[int],
+        account_id: Optional[str] = None,
     ) -> HealthScoreDetail:
         """
         Get detailed health score with factor breakdown for a single account.
@@ -2814,6 +3085,7 @@ class DatabricksService:
                 renewal_days=renewal_days,
                 pendo_data=pendo_data,
                 freshdesk_data=freshdesk_data,
+                account_id=account_id,
             )
 
     def get_account_by_id(self, account_id: str) -> Optional[AccountDetail]:

@@ -15,6 +15,7 @@ import type {
   TaskCreate,
   SupportTicketsResponse,
   CSMSupportTicketsResponse,
+  RenewalHealthInsightResponse,
 } from '../types'
 
 const api = axios.create({
@@ -121,6 +122,17 @@ export interface HealthScoreHistoryResponse {
 
 export async function getHealthScoreHistory(accountId: string): Promise<HealthScoreHistoryResponse> {
   const { data } = await api.get<HealthScoreHistoryResponse>(`/accounts/${accountId}/health-score/history`)
+  return data
+}
+
+export async function getRenewalHealthInsight(
+  accountId: string,
+  withLlm = false
+): Promise<RenewalHealthInsightResponse> {
+  const { data } = await api.get<RenewalHealthInsightResponse>(
+    `/accounts/${accountId}/health-score/renewal-insight`,
+    { params: { with_llm: withLlm } }
+  )
   return data
 }
 

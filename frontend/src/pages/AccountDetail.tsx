@@ -11,6 +11,7 @@ import { useLayoutPersistence } from '../hooks/useLayoutPersistence'
 import { DraggableWidgetGrid, getDefaultLayout } from '../components/DraggableWidgetGrid'
 import { Badge } from '../components/widgets'
 import { WeeklySummaryDrawer } from '../components/WeeklySummaryDrawer'
+import { RenewalHealthInsightDrawer } from '../components/RenewalHealthInsightDrawer'
 import { clsx } from 'clsx'
 import { healthLabel, healthVariant } from '../utils/healthLabels'
 
@@ -50,6 +51,7 @@ export function AccountDetail({ accountId, onBack }: AccountDetailProps) {
   
   // Weekly summary drawer
   const [summaryOpen, setSummaryOpen] = useState(false)
+  const [renewalInsightOpen, setRenewalInsightOpen] = useState(false)
   
   // Generate QBR handler - directly generates PowerPoint
   const handleGenerateQBR = async () => {
@@ -248,6 +250,13 @@ export function AccountDetail({ accountId, onBack }: AccountDetailProps) {
         accountName={account?.name || ''}
         isOpen={summaryOpen}
         onClose={() => setSummaryOpen(false)}
+      />
+
+      <RenewalHealthInsightDrawer
+        accountId={accountId}
+        accountName={account?.name || ''}
+        isOpen={renewalInsightOpen}
+        onClose={() => setRenewalInsightOpen(false)}
       />
     </div>
   )

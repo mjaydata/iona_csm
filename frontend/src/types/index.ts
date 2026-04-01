@@ -21,6 +21,30 @@ export interface HealthScoreDetail {
   scoring_version: string
 }
 
+export interface RenewalContractLine {
+  revenue_type: string
+  arr_eur: number
+  renewal_date: string | null
+  renewal_days: number | null
+  contract_group?: string | null
+}
+
+export interface RenewalHealthInsightResponse {
+  account_id: string
+  account_name: string
+  contracts: RenewalContractLine[]
+  nearest_renewal_days: number | null
+  base_renewal_deduction: number
+  adjusted_renewal_deduction: number
+  materiality_weight: number
+  near_term_arr_eur: number
+  nearest_line_arr_eur: number
+  share_of_near_term: number
+  deterministic_explanation: string
+  llm_narrative: string | null
+  scoring_version: string
+}
+
 export interface RenewalInfo {
   revenue_type: string
   renewal_date: string | null

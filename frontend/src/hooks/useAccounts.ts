@@ -1,5 +1,5 @@
-import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getAccounts, getAccountFullDetail, getConfluenceImplementation, getMetricsSummary, getAccountTypeCounts, getCustomerGrowth, getCustomerGrowthBreakdown, updateAccountStatus, createTask, getARRAnalysis, type GetAccountsParams, type GetARRAnalysisParams } from '../services/api'
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
+import { getAccounts, getAccountFullDetail, getConfluenceImplementation, getMetricsSummary, getAccountTypeCounts, getCustomerGrowth, getCustomerGrowthBreakdown, updateAccountStatus, createTask, getARRAnalysis, getRenewalHealthInsight, type GetAccountsParams, type GetARRAnalysisParams } from '../services/api'
 import type { TaskCreate } from '../types'
 
 export function useMetrics(accountType?: string, renewalPeriod?: number) {
@@ -30,6 +30,19 @@ export function useAccountFullDetail(accountId: string | null) {
     queryKey: ['account-detail', accountId],
     queryFn: () => getAccountFullDetail(accountId!),
     enabled: !!accountId,
+  })
+}
+
+export function useRenewalHealthInsight(
+  accountId: string | null,
+  options: { withLlm?: boolean; enabled?: boolean } = {}
+) {
+  const { withLlm = false, enabled = true } = options
+  return useQuery({
+    queryKey: ['renewal-health-insight', accountId, withLlm],
+    queryFn: () => getRenewalHealthInsight(accountId!, withLlm),
+    enabled: !!accountId && enabled,
+    placeholderData: keepPreviousData,
   })
 }
 

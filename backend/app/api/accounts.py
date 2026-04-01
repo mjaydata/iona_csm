@@ -16,6 +16,7 @@ from ..models.schemas import (
     HealthScoreDetail,
     HealthScoreHistoryResponse,
     HealthScoreHistoryPoint,
+    RenewalHealthInsightResponse,
     WeeklySummaryResponse,
     WeeklySummaryItem,
     SupportTicketsResponse,
@@ -196,6 +197,30 @@ async def get_health_score_history(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/{account_id}/health-score/renewal-insight", response_model=RenewalHealthInsightResponse)
+async def get_renewal_health_insight(
+    account_id: str,
+    with_llm: bool = Query(False, description="Include AI narrative (slower)"),
+    db: DatabricksService = Depends(get_databricks_service),
+) -> RenewalHealthInsightResponse:
+    """Renewal lines, materiality context, and optional LLM explanation for the health score."""
+    try:
+        account = db.get_account_by_id(account_id)
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+        return db.get_renewal_health_insight(
+            account_id=account_id,
+            account_name=account.name,
+            renewal_days_dim=account.renewal_days,
+            with_llm=with_llm,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"get_renewal_health_insight error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/{account_id}/health-score", response_model=HealthScoreDetail)
 async def get_health_score_detail(
     account_id: str,
@@ -212,7 +237,9 @@ async def get_health_score_detail(
         if not account:
             raise HTTPException(status_code=404, detail="Account not found")
         
-        health_detail = db.get_health_score_detail_for_account(account.name, account.renewal_days)
+        health_detail = db.get_health_score_detail_for_account(
+            account.name, account.renewal_days, account_id
+        )
         return health_detail
     except HTTPException:
         raise
@@ -288,8 +315,9 @@ async def generate_qbr(
         
         # Get health score detail
         health_detail = db.get_health_score_detail_for_account(
-            account_full.account.name, 
-            account_full.account.renewal_days
+            account_full.account.name,
+            account_full.account.renewal_days,
+            account_id,
         )
         
         # Prepare data for QBR generator
