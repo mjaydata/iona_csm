@@ -1,10 +1,15 @@
 import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { clsx } from 'clsx'
-import { ChevronDown, ChevronRight, Loader2, Info, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, Loader2, Info, X, Sparkles } from 'lucide-react'
 import type { Account, RenewalInfo } from '../types'
 import { getHealthScoreDetail, getHealthScoreHistory, type HealthScoreDetail, type HealthScoreHistoryPoint } from '../services/api'
 import { healthLabel, healthBadgeLabel } from '../utils/healthLabels'
+import { RenewalHealthInsightDrawer } from './RenewalHealthInsightDrawer'
+
+function isContractRenewalFactor(name: string): boolean {
+  return name.trim().toLowerCase() === 'contract renewal'
+}
 
 interface AccountTableProps {
   accounts: Account[]
@@ -192,6 +197,7 @@ function HealthBadgeWithSignal({
   signalDescription,
   healthScoreDetail: initialDetail,
   accountId,
+  accountName,
 }: {
   health: string
   signalType: string | null
@@ -211,8 +217,10 @@ function HealthBadgeWithSignal({
     scoring_version: string
   }
   accountId: string
+  accountName: string
 }) {
   const [showModal, setShowModal] = useState(false)
+  const [renewalDrawerOpen, setRenewalDrawerOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [fetchedDetail, setFetchedDetail] = useState<HealthScoreDetail | null>(null)
   
@@ -237,6 +245,14 @@ function HealthBadgeWithSignal({
         })
     }
   }, [showModal, needsDetailFetch, accountId, loading, fetchedDetail])
+
+  const openRenewalInsight = () => {
+    setShowModal(false)
+    setRenewalDrawerOpen(true)
+  }
+
+  const renewalPrimarySignal =
+    signalType === 'renewal' && !!signalDescription
 
   return (
     <>
@@ -324,12 +340,21 @@ function HealthBadgeWithSignal({
                 <div className="space-y-2">
                   {healthScoreDetail.factors.map((factor, idx) => {
                     const hasData = !factor.detail.includes('integration') && !factor.detail.includes('Requires');
-                    return (
-                      <div key={idx} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
-                        <div className="flex items-center gap-3">
-                          <span className="text-lg">{factor.icon}</span>
-                          <div>
-                            <div className="text-sm font-medium text-slate-700">{factor.name}</div>
+                    const renewalExplain = isContractRenewalFactor(factor.name)
+                    const rowInner = (
+                      <>
+                        <div className="flex items-center gap-3 min-w-0">
+                          <span className="text-lg flex-shrink-0">{factor.icon}</span>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="text-sm font-medium text-slate-700">{factor.name}</span>
+                              {renewalExplain && (
+                                <span className="text-[10px] font-medium text-primary-600 flex items-center gap-0.5">
+                                  <Sparkles className="w-3 h-3" />
+                                  Explain
+                                </span>
+                              )}
+                            </div>
                             <div className={clsx(
                               'text-xs',
                               hasData ? 'text-slate-500' : 'text-slate-400 italic'
@@ -339,15 +364,36 @@ function HealthBadgeWithSignal({
                           </div>
                         </div>
                         <div className={clsx(
-                          'text-sm font-bold min-w-[40px] text-center py-1 px-2 rounded-lg',
+                          'text-sm font-bold min-w-[40px] text-center py-1 px-2 rounded-lg flex-shrink-0',
                           factor.points >= 15 ? 'bg-red-100 text-red-600' :
                           factor.points >= 8 ? 'bg-amber-100 text-amber-600' :
                           factor.points > 0 ? 'bg-slate-200 text-slate-600' : 'bg-emerald-100 text-emerald-600'
                         )}>
                           {factor.points > 0 ? `-${factor.points}` : '✓'}
                         </div>
+                      </>
+                    )
+                    if (renewalExplain) {
+                      return (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            openRenewalInsight()
+                          }}
+                          className="w-full flex items-center justify-between gap-2 p-3 bg-slate-50 hover:bg-primary-50/80 rounded-xl border border-transparent hover:border-primary-100 text-left transition-colors"
+                          title="Open renewal breakdown and materiality"
+                        >
+                          {rowInner}
+                        </button>
+                      )
+                    }
+                    return (
+                      <div key={idx} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
+                        {rowInner}
                       </div>
-                    );
+                    )
                   })}
                 </div>
               ) : (
@@ -360,17 +406,41 @@ function HealthBadgeWithSignal({
             {/* Primary Signal */}
             {signalDescription && (
               <div className="px-5 pb-4">
-                <div className="flex items-center gap-3 p-3 bg-amber-50 border border-amber-100 rounded-xl">
-                  <div className={clsx(
-                    'w-2 h-2 rounded-full',
-                    signalType === 'churn' || signalType === 'support' ? 'bg-red-500' :
-                    signalType === 'renewal' || signalType === 'usage' ? 'bg-amber-500' : 'bg-emerald-500'
-                  )} />
-                  <div>
-                    <div className="text-xs font-medium text-amber-800">Primary Signal</div>
-                    <div className="text-sm text-amber-700">{signalDescription}</div>
+                {renewalPrimarySignal ? (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      openRenewalInsight()
+                    }}
+                    className="w-full flex items-center gap-3 p-3 bg-amber-50 border border-amber-100 hover:border-primary-200 hover:bg-amber-50/90 rounded-xl text-left transition-colors"
+                    title="Open renewal breakdown and materiality"
+                  >
+                    <div className="w-2 h-2 rounded-full flex-shrink-0 bg-amber-500" />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-medium text-amber-800 flex items-center gap-1.5">
+                        Primary Signal
+                        <span className="text-[10px] font-medium text-primary-600 flex items-center gap-0.5">
+                          <Sparkles className="w-3 h-3" />
+                          Explain
+                        </span>
+                      </div>
+                      <div className="text-sm text-amber-700">{signalDescription}</div>
+                    </div>
+                  </button>
+                ) : (
+                  <div className="flex items-center gap-3 p-3 bg-amber-50 border border-amber-100 rounded-xl">
+                    <div className={clsx(
+                      'w-2 h-2 rounded-full',
+                      signalType === 'churn' || signalType === 'support' ? 'bg-red-500' :
+                      signalType === 'renewal' || signalType === 'usage' ? 'bg-amber-500' : 'bg-emerald-500'
+                    )} />
+                    <div>
+                      <div className="text-xs font-medium text-amber-800">Primary Signal</div>
+                      <div className="text-sm text-amber-700">{signalDescription}</div>
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
             )}
 
@@ -402,6 +472,13 @@ function HealthBadgeWithSignal({
         </div>,
         document.body
       )}
+
+      <RenewalHealthInsightDrawer
+        accountId={accountId}
+        accountName={accountName}
+        isOpen={renewalDrawerOpen}
+        onClose={() => setRenewalDrawerOpen(false)}
+      />
     </>
   )
 }
@@ -695,6 +772,7 @@ function AccountRow({
           signalDescription={account.primary_signal}
           healthScoreDetail={account.health_score_detail}
           accountId={account.id}
+          accountName={account.name}
         />
       </td>
       <td className="px-3 py-3">
