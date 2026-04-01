@@ -522,6 +522,8 @@ function RenewalTimelineRibbon({ renewals }: { renewals?: RenewalInfo[] }) {
   const [tooltipStyle, setTooltipStyle] = useState<React.CSSProperties>({})
 
   const TIMELINE_YEARS = 4
+  /** Show rev-rec dates this far in the past (health score uses min days; overdue was hidden before). */
+  const MAX_PAST_DAYS_ON_RIBBON = 3 * 365
   const today = useMemo(() => new Date(), [])
   const totalDays = useMemo(() => TIMELINE_YEARS * 365, [])
 
@@ -544,7 +546,8 @@ function RenewalTimelineRibbon({ renewals }: { renewals?: RenewalInfo[] }) {
         const rd = new Date(r.renewal_date!)
         const daysDiff = Math.round((rd.getTime() - today.getTime()) / 86400000)
         const pct = Math.max(0, Math.min(100, (daysDiff / totalDays) * 100))
-        const inWindow = daysDiff >= -30 && daysDiff <= totalDays + 30
+        const inWindow =
+          daysDiff >= -MAX_PAST_DAYS_ON_RIBBON && daysDiff <= totalDays + 30
         return { ...r, pct, daysDiff, inWindow }
       })
       .filter(m => m.inWindow)

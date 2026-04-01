@@ -362,19 +362,35 @@ class DatabricksService:
         else:
             return AccountStatus.STABLE
 
+    def _renewal_tier_deduction_and_detail(
+        self, renewal_days: Optional[int]
+    ) -> Tuple[int, str]:
+        """
+        Raw renewal risk deduction (max 25) from days to nearest rev-rec end.
+
+        DATEDIFF(rev_rec_end, today) is negative when the end date is in the past.
+        In Python, any negative renewal_days satisfies ``<= 30``, so all overdue
+        lines currently map to the critical band — use explicit past-due wording.
+        """
+        if renewal_days is None or renewal_days >= 999:
+            return 0, "No upcoming renewal"
+        rd = int(renewal_days)
+        if rd < 0:
+            past = abs(rd)
+            return 25, f"{past} days past rev-rec end (critical)"
+        if rd <= 30:
+            return 25, f"{rd} days until rev-rec end (critical)"
+        if rd <= 60:
+            return 18, f"{rd} days until rev-rec end (urgent)"
+        if rd <= 90:
+            return 12, f"{rd} days until rev-rec end (soon)"
+        if rd <= 180:
+            return 5, f"{rd} days until rev-rec end"
+        return 0, f"{rd}+ days until rev-rec end"
+
     def _tier_renewal_deduction_days(self, renewal_days: Optional[int]) -> Tuple[int, str]:
-        """Raw renewal risk deduction (max 25) from days to nearest renewal."""
-        if renewal_days is not None and renewal_days < 999:
-            if renewal_days <= 30:
-                return 25, f"{renewal_days} days away (critical)"
-            if renewal_days <= 60:
-                return 18, f"{renewal_days} days away (urgent)"
-            if renewal_days <= 90:
-                return 12, f"{renewal_days} days away (soon)"
-            if renewal_days <= 180:
-                return 5, f"{renewal_days} days away"
-            return 0, f"{renewal_days}+ days away"
-        return 0, "No upcoming renewal"
+        """Backward-compatible alias for tier + human-readable renewal line."""
+        return self._renewal_tier_deduction_and_detail(renewal_days)
 
     def _materiality_renewal_adjustment(
         self, base_deduction: int, lines: List[dict]
@@ -416,8 +432,13 @@ class DatabricksService:
         adjusted = int(round(base_deduction * weight))
         adjusted = max(0, min(25, adjusted))
         rt = str(nearest.get("revenue_type") or "")
+        nd = int(nearest["renewal_days"])
+        if nd < 0:
+            lead = f"Nearest line is {abs(nd)}d past rev-rec end ({rt})"
+        else:
+            lead = f"Nearest renewal in {nd}d ({rt})"
         detail = (
-            f"Nearest renewal in {int(nearest['renewal_days'])}d ({rt}), "
+            f"{lead}, "
             f"€{n_arr:,.0f} ≈ {share*100:.0f}% of €{total_near:,.0f} near-term renewal ARR — "
             f"deduction scaled ({base_deduction} → {adjusted}) so small contracts don't dominate the score."
         )
@@ -935,25 +956,12 @@ class DatabricksService:
         factors = []
         
         # 1. CONTRACT RENEWAL (max 25 point deduction)
-        if renewal_days < 999:
-            if renewal_days <= 30:
-                renewal_deduction = 25
-                renewal_detail = f"{renewal_days} days away (critical)"
-            elif renewal_days <= 60:
-                renewal_deduction = 18
-                renewal_detail = f"{renewal_days} days away (urgent)"
-            elif renewal_days <= 90:
-                renewal_deduction = 12
-                renewal_detail = f"{renewal_days} days away (soon)"
-            elif renewal_days <= 180:
-                renewal_deduction = 5
-                renewal_detail = f"{renewal_days} days away"
-            else:
-                renewal_deduction = 0
-                renewal_detail = f"{renewal_days}+ days away"
+        if renewal_days >= 999:
+            renewal_deduction, renewal_detail = 0, "No upcoming renewal"
         else:
-            renewal_deduction = 0
-            renewal_detail = "No upcoming renewal"
+            renewal_deduction, renewal_detail = self._renewal_tier_deduction_and_detail(
+                renewal_days
+            )
         
         factors.append(HealthScoreFactor(
             name="Contract Renewal",
