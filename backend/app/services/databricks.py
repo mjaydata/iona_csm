@@ -12,6 +12,9 @@ from ..models.schemas import (
     Account,
     AccountDetail,
     AccountFullDetail,
+    GongActivityAnalysis,
+    GongCallSummary,
+    GongTrackerSignal,
     AccountListResponse,
     AccountStatus,
     AccountWithCSM,
@@ -164,6 +167,21 @@ def matches_search(name: str, pattern: str) -> bool:
 
 # Table configuration
 DIM_CUSTOMERS_TABLE = "silver.silver_layer.dim_customers"
+GONG_CALL_TABLE = "silver.silver_layer.fct_gong_call"
+GONG_BRIDGE_TABLE = "silver.silver_layer.bridge_gong_call_to_sf_object"
+GONG_TRACKER_HIT_TABLE = "silver.silver_layer.fct_gong_call_tracker_hit"
+GONG_KEY_POINT_TABLE = "silver.silver_layer.fct_gong_call_key_point"
+GONG_PARTICIPANT_TABLE = "silver.silver_layer.fct_gong_call_participant"
+
+GONG_RISK_TRACKERS = {
+    "Competitors", "Competition", "Objections", "Customer objections",
+    "Customer concerns", "Discount", "Reactions to pricing",
+}
+GONG_ENGAGEMENT_TRACKERS = {
+    "Value (tracker)", "Champion", "Business goals (tracker)",
+    "Strategic business goals", "Decision process (tracker)",
+    "Decision process (beta)", "Economic buyer",
+}
 DIM_USERS_TABLE = "silver.silver_layer.dim_salesforce_ae_user"
 DIM_FRESHDESK_CUSTOMERS_TABLE = "silver.silver_layer.dim_freshdesk_account_customers"
 FCT_FRESHDESK_TICKETS_TABLE = "silver.silver_layer.fct_freshdesk_ticket_history"
@@ -4749,6 +4767,178 @@ class DatabricksService:
             logger.error(f"get_confluence_implementation_context error: {e}", exc_info=True)
             return ConfluenceImplementationResponse(has_content=False)
 
+    def _fetch_gong_activity(self, sf_account_id: str) -> Optional[GongActivityAnalysis]:
+        """Fetch Gong call activity for an account using its Salesforce account ID."""
+        try:
+            safe_id = self._sql_escape(sf_account_id)
+            with self.get_connection() as conn:
+                if conn is None:
+                    return None
+                cursor = conn.cursor()
+
+                # Query 1: recent calls (DISTINCT to avoid bridge fan-out)
+                cursor.execute(f"""
+                    SELECT DISTINCT
+                        g.call_id,
+                        g.call_title,
+                        g.call_started_ts,
+                        g.call_duration_seconds,
+                        g.call_brief
+                    FROM {GONG_CALL_TABLE} g
+                    JOIN {GONG_BRIDGE_TABLE} b ON g.call_id = b.call_id
+                    WHERE b.object_type = 'account'
+                      AND b.object_id = '{safe_id}'
+                    ORDER BY g.call_started_ts DESC
+                    LIMIT 10
+                """)
+                call_rows = cursor.fetchall()
+
+                if not call_rows:
+                    return None
+
+                call_ids = [str(r[0]) for r in call_rows]
+                now = datetime.now()
+
+                # Cadence counts
+                meetings_30d = sum(
+                    1 for r in call_rows
+                    if r[2] and (now - r[2].replace(tzinfo=None)).days <= 30
+                )
+                meetings_90d = sum(
+                    1 for r in call_rows
+                    if r[2] and (now - r[2].replace(tzinfo=None)).days <= 90
+                )
+                last_ts = call_rows[0][2]
+                days_since = int((now - last_ts.replace(tzinfo=None)).days) if last_ts else None
+
+                # Query 2: tracker signals (last 90 days) — call_id is BIGINT, needs CAST
+                cursor.execute(f"""
+                    SELECT
+                        t.tracker_name,
+                        COUNT(DISTINCT t.call_id) AS call_count,
+                        COALESCE(SUM(t.phrase_count), 0) AS mention_count
+                    FROM {GONG_TRACKER_HIT_TABLE} t
+                    JOIN {GONG_BRIDGE_TABLE} b ON CAST(t.call_id AS STRING) = b.call_id
+                    JOIN {GONG_CALL_TABLE} g ON CAST(t.call_id AS STRING) = g.call_id
+                    WHERE b.object_type = 'account'
+                      AND b.object_id = '{safe_id}'
+                      AND g.call_started_ts >= DATEADD(day, -90, CURRENT_TIMESTAMP())
+                    GROUP BY t.tracker_name
+                    ORDER BY call_count DESC
+                """)
+                tracker_rows = cursor.fetchall()
+
+                tracker_signals = []
+                risk_signal_calls = 0
+                engagement_signal_calls = 0
+                for row in tracker_rows:
+                    name, cnt, mentions = row[0], int(row[1]), int(row[2])
+                    if name in GONG_RISK_TRACKERS:
+                        category = "risk"
+                        risk_signal_calls += cnt
+                    elif name in GONG_ENGAGEMENT_TRACKERS:
+                        category = "engagement"
+                        engagement_signal_calls += cnt
+                    else:
+                        category = "general"
+                    tracker_signals.append(GongTrackerSignal(
+                        tracker_name=name,
+                        call_count=cnt,
+                        mention_count=mentions,
+                        category=category,
+                    ))
+
+                # Query 3: key points for most recent call
+                most_recent_id = call_ids[0]
+                cursor.execute(f"""
+                    SELECT key_point_text
+                    FROM {GONG_KEY_POINT_TABLE}
+                    WHERE call_id = '{self._sql_escape(most_recent_id)}'
+                    ORDER BY key_point_index
+                    LIMIT 5
+                """)
+                key_points = [r[0] for r in cursor.fetchall() if r[0]]
+
+                # Query 4: participants for the 5 most recent calls
+                recent_ids = call_ids[:5]
+                ids_sql = ", ".join(f"'{self._sql_escape(cid)}'" for cid in recent_ids)
+                cursor.execute(f"""
+                    SELECT DISTINCT p.call_id, p.name, p.affiliation
+                    FROM {GONG_PARTICIPANT_TABLE} p
+                    WHERE p.call_id IN ({ids_sql})
+                      AND p.affiliation IN ('External', 'Internal')
+                      AND p.name IS NOT NULL
+                """)
+                participants_by_call: dict = {}
+                for row in cursor.fetchall():
+                    cid, name, aff = str(row[0]), row[1], row[2]
+                    participants_by_call.setdefault(cid, {"External": [], "Internal": []})
+                    participants_by_call[cid][aff].append(name)
+
+                # Build GongCallSummary list
+                recent_calls = []
+                for row in call_rows:
+                    cid = str(row[0])
+                    brief = row[4] or ""
+                    excerpt = brief[:200].rstrip() if brief else None
+                    pts = participants_by_call.get(cid, {})
+                    duration_sec = row[3] or 0
+                    recent_calls.append(GongCallSummary(
+                        call_id=cid,
+                        title=row[1] or "Untitled",
+                        started_at=row[2],
+                        duration_minutes=max(1, duration_sec // 60),
+                        brief_excerpt=excerpt,
+                        customer_attendees=pts.get("External", []),
+                        csm_attendees=pts.get("Internal", []),
+                    ))
+
+                # Derive engagement score and labels
+                rate_30d = meetings_30d / 1.0
+                rate_90d = meetings_90d / 3.0  # monthly equivalent
+                if meetings_90d == 0:
+                    engagement_score = 20
+                    engagement_label = "No recent meetings"
+                    engagement_trend = "declining"
+                elif days_since is not None and days_since > 60:
+                    engagement_score = 35
+                    engagement_label = "No meetings in 60+ days"
+                    engagement_trend = "declining"
+                elif days_since is not None and days_since > 30:
+                    engagement_score = 50
+                    engagement_label = "Low cadence"
+                    engagement_trend = "stable"
+                elif risk_signal_calls > engagement_signal_calls:
+                    engagement_score = 55
+                    engagement_label = "Risk signals present"
+                    engagement_trend = "declining" if rate_30d < rate_90d else "stable"
+                elif engagement_signal_calls > risk_signal_calls:
+                    engagement_score = 85
+                    engagement_label = "Healthy engagement"
+                    engagement_trend = "improving" if rate_30d >= rate_90d else "stable"
+                else:
+                    engagement_score = 70
+                    engagement_label = "Neutral"
+                    engagement_trend = "improving" if rate_30d > rate_90d else "stable"
+
+                return GongActivityAnalysis(
+                    meetings_30d=meetings_30d,
+                    meetings_90d=meetings_90d,
+                    last_meeting_date=last_ts,
+                    days_since_last_meeting=days_since,
+                    tracker_signals=tracker_signals,
+                    risk_signal_calls=risk_signal_calls,
+                    engagement_signal_calls=engagement_signal_calls,
+                    engagement_label=engagement_label,
+                    engagement_trend=engagement_trend,
+                    engagement_score=engagement_score,
+                    recent_calls=recent_calls,
+                    latest_key_points=key_points,
+                )
+        except Exception as e:
+            logger.warning(f"_fetch_gong_activity error for {sf_account_id}: {e}")
+            return None
+
     def _build_full_detail_with_real_account(self, account_detail: AccountDetail) -> AccountFullDetail:
         """Build full detail response using real account header + placeholder widget data."""
         today = date.today()
@@ -4778,6 +4968,8 @@ class DatabricksService:
         )
 
         contract = self._fetch_contract_context(account_detail)
+
+        gong_activity = self._fetch_gong_activity(account_detail.id)
 
         risk_assessment = RiskAssessment(
             churn_risk_score=0, renewal_risk_score=0,
@@ -4821,6 +5013,7 @@ class DatabricksService:
             notes=[],
             meeting_brief=meeting_brief,
             value_realization=value_realization,
+            gong_activity=gong_activity,
             last_updated=now,
             last_touch_date=now,
         )

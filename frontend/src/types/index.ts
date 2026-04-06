@@ -264,10 +264,11 @@ export type WidgetType =
   | 'notes' 
   | 'risk' 
   | 'value' 
-  | 'sentiment' 
-  | 'benchmark' 
-  | 'alerts' 
+  | 'sentiment'
+  | 'benchmark'
+  | 'alerts'
   | 'signals'
+  | 'gong'
 
 export interface WidgetConfig {
   id: string
@@ -693,10 +694,47 @@ export interface AccountFullDetail {
   notes: HumanNote[]
   meeting_brief: MeetingBrief
   value_realization: ValueRealization
-  
+  gong_activity: GongActivityAnalysis | null
+
   // Metadata
   last_updated: string
   last_touch_date: string
+}
+
+// ============================================
+// Gong Activity Types
+// ============================================
+
+export interface GongTrackerSignal {
+  tracker_name: string
+  call_count: number
+  mention_count: number
+  category: 'risk' | 'engagement' | 'general'
+}
+
+export interface GongCallSummary {
+  call_id: string
+  title: string
+  started_at: string
+  duration_minutes: number
+  brief_excerpt: string | null
+  customer_attendees: string[]
+  csm_attendees: string[]
+}
+
+export interface GongActivityAnalysis {
+  meetings_30d: number
+  meetings_90d: number
+  last_meeting_date: string | null
+  days_since_last_meeting: number | null
+  tracker_signals: GongTrackerSignal[]
+  risk_signal_calls: number
+  engagement_signal_calls: number
+  engagement_label: string
+  engagement_trend: string
+  engagement_score: number
+  recent_calls: GongCallSummary[]
+  latest_key_points: string[]
 }
 
 // Extended Account Detail

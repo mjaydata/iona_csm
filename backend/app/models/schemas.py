@@ -677,6 +677,54 @@ class ConfluenceImplementationResponse(BaseModel):
     root_page_name: Optional[str] = None
 
 
+# ============================================
+# Gong Activity Schemas
+# ============================================
+
+class GongTrackerSignal(BaseModel):
+    """A single Gong topic tracker with hit count across recent calls."""
+    tracker_name: str
+    call_count: int
+    mention_count: int
+    category: str  # "risk" | "engagement" | "general"
+
+
+class GongCallSummary(BaseModel):
+    """Summary of a single Gong call for display in the widget."""
+    call_id: str
+    title: str
+    started_at: datetime
+    duration_minutes: int
+    brief_excerpt: Optional[str] = None  # first 200 chars of call_brief
+    customer_attendees: List[str] = []
+    csm_attendees: List[str] = []
+
+
+class GongActivityAnalysis(BaseModel):
+    """Gong engagement analysis for an account — cadence, topics, derived indicator."""
+    # Cadence
+    meetings_30d: int
+    meetings_90d: int
+    last_meeting_date: Optional[datetime] = None
+    days_since_last_meeting: Optional[int] = None
+
+    # Topic signals from tracker hits (last 90d)
+    tracker_signals: List[GongTrackerSignal] = []
+    risk_signal_calls: int = 0
+    engagement_signal_calls: int = 0
+
+    # Derived engagement indicator (no LLM)
+    engagement_label: str  # "Risk signals present" | "Healthy engagement" | "Neutral"
+    engagement_trend: str  # "improving" | "stable" | "declining"
+
+    # 0–100 score for health score wiring
+    engagement_score: int
+
+    # Recent call list + key points from the most recent call
+    recent_calls: List[GongCallSummary] = []
+    latest_key_points: List[str] = []
+
+
 class AccountFullDetail(BaseModel):
     """Complete account detail with all use case data."""
     # Basic account info
@@ -697,7 +745,8 @@ class AccountFullDetail(BaseModel):
     notes: List[HumanNote] = []
     meeting_brief: MeetingBrief
     value_realization: ValueRealization
-    
+    gong_activity: Optional[GongActivityAnalysis] = None
+
     # Metadata
     last_updated: datetime
     last_touch_date: datetime
