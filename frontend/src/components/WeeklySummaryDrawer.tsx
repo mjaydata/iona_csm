@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { X, ChevronDown, ChevronRight, Loader2, AlertCircle, BarChart3, Headphones, FileText, Heart, RefreshCw } from 'lucide-react'
+import { X, ChevronDown, ChevronRight, Loader2, AlertCircle, BarChart3, Headphones, FileText, Heart, Phone, RefreshCw } from 'lucide-react'
 import { getWeeklySummary, type WeeklySummaryItem } from '../services/api'
 import { clsx } from 'clsx'
 
@@ -28,7 +28,7 @@ function formatWeekLabel(weekStart: string, weekEnd: string): string {
   return `${fmt(start)} – ${fmt(end)}`
 }
 
-type BulletCategory = 'pendo' | 'freshdesk' | 'contract' | 'health' | 'general'
+type BulletCategory = 'pendo' | 'freshdesk' | 'contract' | 'health' | 'gong' | 'general'
 
 interface ParsedBullet {
   text: string
@@ -57,6 +57,7 @@ const categoryConfig: Record<BulletCategory, { icon: typeof BarChart3; color: st
   freshdesk: { icon: Headphones, color: 'text-amber-500', bg: 'bg-amber-50' },
   contract: { icon: FileText, color: 'text-emerald-500', bg: 'bg-emerald-50' },
   health: { icon: Heart, color: 'text-rose-500', bg: 'bg-rose-50' },
+  gong: { icon: Phone, color: 'text-violet-500', bg: 'bg-violet-50' },
   general: { icon: BarChart3, color: 'text-slate-500', bg: 'bg-slate-50' },
 }
 
@@ -91,21 +92,31 @@ function WeekSection({ week, index }: { week: WeeklySummaryItem; index: number }
 
       {expanded && (
         <div className="px-4 pb-3 space-y-2">
-          {bullets.length === 0 ? (
+          {bullets.length === 0 && !week.gong_summary ? (
             <p className="text-xs text-slate-400 italic pl-5">No activity data for this week.</p>
           ) : (
-            bullets.map((bullet, i) => {
-              const config = categoryConfig[bullet.category]
-              const Icon = config.icon
-              return (
-                <div key={i} className="flex items-start gap-2.5">
-                  <div className={clsx('w-5 h-5 rounded flex items-center justify-center flex-shrink-0 mt-0.5', config.bg)}>
-                    <Icon className={clsx('w-3 h-3', config.color)} />
+            <>
+              {bullets.map((bullet, i) => {
+                const config = categoryConfig[bullet.category]
+                const Icon = config.icon
+                return (
+                  <div key={i} className="flex items-start gap-2.5">
+                    <div className={clsx('w-5 h-5 rounded flex items-center justify-center flex-shrink-0 mt-0.5', config.bg)}>
+                      <Icon className={clsx('w-3 h-3', config.color)} />
+                    </div>
+                    <p className="text-xs text-slate-600 leading-relaxed">{bullet.text}</p>
                   </div>
-                  <p className="text-xs text-slate-600 leading-relaxed">{bullet.text}</p>
+                )
+              })}
+              {week.gong_summary && (
+                <div className="flex items-start gap-2.5">
+                  <div className="w-5 h-5 rounded flex items-center justify-center flex-shrink-0 mt-0.5 bg-violet-50">
+                    <Phone className="w-3 h-3 text-violet-500" />
+                  </div>
+                  <p className="text-xs text-slate-600 leading-relaxed">{week.gong_summary}</p>
                 </div>
-              )
-            })
+              )}
+            </>
           )}
         </div>
       )}

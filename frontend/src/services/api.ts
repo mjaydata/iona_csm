@@ -142,6 +142,7 @@ export interface WeeklySummaryItem {
   week_start: string
   week_end: string
   narrative: string
+  gong_summary?: string | null
   generated_at: string | null
 }
 

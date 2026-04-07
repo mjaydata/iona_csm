@@ -1706,7 +1706,7 @@ class DatabricksService:
 
                 cursor.execute(f"""
                     SELECT account_id, account_name, week_start, week_end,
-                           narrative, generated_at
+                           narrative, gong_summary, generated_at
                     FROM {SUMMARIES_TABLE}
                     WHERE account_id = '{safe_id}'
                     ORDER BY week_start DESC
@@ -1723,7 +1723,8 @@ class DatabricksService:
                         "week_start": row[2],
                         "week_end": row[3],
                         "narrative": row[4] or "",
-                        "generated_at": row[5],
+                        "gong_summary": row[5] or None,
+                        "generated_at": row[6],
                     })
 
                 logger.info(f"Weekly summaries for {account_id}: {len(weeks)} of {total}")

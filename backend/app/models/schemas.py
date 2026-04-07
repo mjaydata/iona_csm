@@ -109,6 +109,7 @@ class WeeklySummaryItem(BaseModel):
     week_start: date
     week_end: date
     narrative: str
+    gong_summary: Optional[str] = None
     generated_at: Optional[datetime] = None
 
 
