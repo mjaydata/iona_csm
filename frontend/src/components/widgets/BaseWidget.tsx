@@ -19,6 +19,9 @@ interface BaseWidgetProps {
   badge?: React.ReactNode
   dragHandleProps?: React.HTMLAttributes<HTMLDivElement>
   allowFullscreen?: boolean
+  fullscreen?: boolean // External control
+  onFullscreenChange?: (fullscreen: boolean) => void
+  fullscreenContent?: React.ReactNode // Custom content for the fullscreen modal
 }
 
 export function BaseWidget({
@@ -36,10 +39,14 @@ export function BaseWidget({
   badge,
   dragHandleProps,
   allowFullscreen = true,
+  fullscreen,
+  onFullscreenChange,
+  fullscreenContent,
 }: BaseWidgetProps) {
   const [internalCollapsed, setInternalCollapsed] = useState(defaultCollapsed)
-  const [isFullscreen, setIsFullscreen] = useState(false)
+  const [internalFullscreen, setInternalFullscreen] = useState(false)
   const isCollapsed = collapsed !== undefined ? collapsed : internalCollapsed
+  const isFullscreen = fullscreen !== undefined ? fullscreen : internalFullscreen
 
   useEffect(() => {
     if (collapsed !== undefined) {
@@ -47,11 +54,18 @@ export function BaseWidget({
     }
   }, [collapsed])
 
+  useEffect(() => {
+    if (fullscreen !== undefined) {
+      setInternalFullscreen(fullscreen)
+    }
+  }, [fullscreen])
+
   // Close fullscreen on Escape key
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && isFullscreen) {
-        setIsFullscreen(false)
+        setInternalFullscreen(false)
+        onFullscreenChange?.(false)
       }
     }
     if (isFullscreen) {
@@ -81,13 +95,15 @@ export function BaseWidget({
   const handleFullscreen = (e: React.MouseEvent) => {
     e.stopPropagation()
     e.preventDefault()
-    setIsFullscreen(true)
+    setInternalFullscreen(true)
+    onFullscreenChange?.(true)
   }
 
   const handleCloseFullscreen = (e: React.MouseEvent) => {
     e.stopPropagation()
     e.preventDefault()
-    setIsFullscreen(false)
+    setInternalFullscreen(false)
+    onFullscreenChange?.(false)
   }
 
   const widgetContent = (
@@ -131,7 +147,7 @@ export function BaseWidget({
         </div>
         {/* Fullscreen Content */}
         <div className="flex-1 overflow-auto">
-          {widgetContent}
+          {fullscreenContent ?? widgetContent}
         </div>
       </motion.div>
     </div>,
