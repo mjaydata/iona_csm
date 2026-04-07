@@ -673,25 +673,28 @@ class DatabricksService:
         pendo_data: Optional[dict] = None,
         freshdesk_data: Optional[dict] = None,
         account_id: Optional[str] = None,
+        gong_data=None,  # Optional[GongActivityAnalysis]
     ) -> HealthScoreDetail:
         """
         Calculate comprehensive health score with detailed breakdown.
-        
+
         Higher score = healthier account (inverted from risk scoring)
-        
+
         Components (deductions from 100):
-        - Contract Renewal (max -25): Based on days to renewal
-        - Pendo Product Usage (max -40): Based on product usage and user activity trends
-        - Freshdesk Support (max -35): Based on open tickets and sentiment
-        
+        - Contract Renewal (max -20): Based on days to renewal
+        - Pendo Product Usage (max -35): Based on product usage and user activity trends
+        - Freshdesk Support (max -30): Based on open tickets and sentiment
+        - Gong Sentiment (max -15): Based on risk vs engagement tracker signals over 90d
+
         Score mapping:
         - 70-100: Good (healthy)
         - 40-69: At Risk (needs attention)
         - 0-39: Critical (urgent)
-        
+
         Args:
             pendo_data: Pre-fetched Pendo metrics (from batch query). If None, will query individually.
             freshdesk_data: Pre-fetched Freshdesk metrics (from batch query). If None, will query individually.
+            gong_data: GongActivityAnalysis with risk_signal_calls / engagement_signal_calls. If None, Gong factor is skipped.
         """
         factors = []
         has_pendo = False
@@ -727,7 +730,7 @@ class DatabricksService:
         factors.append(HealthScoreFactor(
             name="Contract Renewal",
             points=renewal_deduction,
-            max_points=25,
+            max_points=20,
             detail=renewal_detail,
             icon="📅"
         ))
@@ -785,7 +788,7 @@ class DatabricksService:
         factors.append(HealthScoreFactor(
             name="Pendo Product Usage",
             points=pendo_deduction,
-            max_points=40,
+            max_points=35,
             detail=pendo_detail,
             icon="📊"
         ))
@@ -837,14 +840,46 @@ class DatabricksService:
         factors.append(HealthScoreFactor(
             name="Freshdesk Support",
             points=support_deduction,
-            max_points=35,
+            max_points=30,
             detail=support_detail,
             icon="🎫"
         ))
-        
+
+        # ═══════════════════════════════════════════════════════════════
+        # 4. GONG SENTIMENT (max 15 point deduction)
+        # Based on risk vs engagement tracker signals over last 90d.
+        # Skipped entirely if account has no Gong data (gong_data is None).
+        # ═══════════════════════════════════════════════════════════════
+        if gong_data is not None:
+            r = gong_data.risk_signal_calls
+            e = gong_data.engagement_signal_calls
+            total = r + e
+            if total == 0:
+                gong_pts = 3
+                gong_detail = "Calls recorded but no notable topics detected."
+            elif r == 0:
+                gong_pts = 0
+                gong_detail = f"Positive signals in {e} call(s) — champion/value topics."
+            elif e == 0:
+                gong_pts = 15
+                gong_detail = f"Risk topics in {r} call(s) with no positive signals."
+            elif r > e:
+                gong_pts = 10
+                gong_detail = f"Risk signals outweigh positive — {r} risk vs {e} engagement calls."
+            else:
+                gong_pts = 5
+                gong_detail = f"Mixed signals — {r} risk, {e} engagement calls."
+            factors.append(HealthScoreFactor(
+                name="Gong Sentiment",
+                points=gong_pts,
+                max_points=15,
+                detail=gong_detail,
+                icon="📞",
+            ))
+
         # ═══════════════════════════════════════════════════════════════
         # CALCULATE HEALTH SCORE (100 - total deductions)
-        # Max possible deductions: Renewal(25) + Pendo(40) + Freshdesk(35) = 100
+        # Max possible deductions: Renewal(20) + Pendo(35) + Freshdesk(30) + Gong(15) = 100
         # ═══════════════════════════════════════════════════════════════
         total_deductions = sum(f.points for f in factors)
         health_score = 100 - total_deductions
@@ -864,7 +899,7 @@ class DatabricksService:
             factors=factors,
             has_pendo=has_pendo,
             has_freshdesk=has_freshdesk,
-            scoring_version="rule-based-v1.3"
+            scoring_version="rule-based-v1.4"
         )
 
     def _get_precomputed_health_scores(self, conn) -> dict:
@@ -984,7 +1019,7 @@ class DatabricksService:
         factors.append(HealthScoreFactor(
             name="Contract Renewal",
             points=renewal_deduction,
-            max_points=25,
+            max_points=20,
             detail=renewal_detail,
             icon="📅"
         ))
@@ -1025,7 +1060,7 @@ class DatabricksService:
         factors.append(HealthScoreFactor(
             name="Pendo Product Usage",
             points=pendo_deduction,
-            max_points=40,
+            max_points=35,
             detail=pendo_detail,
             icon="📊"
         ))
@@ -3106,6 +3141,9 @@ class DatabricksService:
             pendo_data = self._get_all_pendo_metrics_batch(conn, [account_name]).get(account_name)
             freshdesk_data = self._get_all_freshdesk_metrics_batch(conn, [account_name]).get(account_name)
             
+            # Fetch Gong sentiment data for this account
+            gong_activity = self._fetch_gong_activity(account_id) if account_id else None
+
             # Calculate full health score detail
             return self.calculate_health_score_detail(
                 account_name=account_name,
@@ -3113,6 +3151,7 @@ class DatabricksService:
                 pendo_data=pendo_data,
                 freshdesk_data=freshdesk_data,
                 account_id=account_id,
+                gong_data=gong_activity,
             )
 
     def get_account_by_id(self, account_id: str) -> Optional[AccountDetail]:
@@ -4945,11 +4984,13 @@ class DatabricksService:
         today = date.today()
         now = datetime.now()
 
+        gong_activity = self._fetch_gong_activity(account_detail.id)
+
         health_breakdown = HealthBreakdown(
             overall_score=74,
             usage_score=68,
             support_score=82,
-            engagement_score=71,
+            engagement_score=gong_activity.engagement_score if gong_activity else 50,
             renewal_score=75,
             trend="stable",
             contributing_factors=[
@@ -4969,8 +5010,6 @@ class DatabricksService:
         )
 
         contract = self._fetch_contract_context(account_detail)
-
-        gong_activity = self._fetch_gong_activity(account_detail.id)
 
         risk_assessment = RiskAssessment(
             churn_risk_score=0, renewal_risk_score=0,
