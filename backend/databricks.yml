@@ -7,6 +7,11 @@ resources:
       name: iona-cx
       source_code_path: .
       description: IONA CX - Customer Success Dashboard
+      resources:
+        - name: sql-warehouse
+          sql_warehouse:
+            id: e0f7c35bbfc5d9cd
+            permission: CAN_USE
 
 targets:
   prod:
