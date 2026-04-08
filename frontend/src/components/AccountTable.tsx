@@ -462,6 +462,13 @@ function HealthBadgeWithSignal({
                     <span className={clsx('w-1.5 h-1.5 rounded-full', healthScoreDetail?.has_freshdesk ? 'bg-emerald-500' : 'bg-slate-400')} />
                     Freshdesk
                   </div>
+                  <div className={clsx(
+                    'flex items-center gap-1.5 text-xs px-2 py-1 rounded-md',
+                    healthScoreDetail?.has_gong ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-500'
+                  )}>
+                    <span className={clsx('w-1.5 h-1.5 rounded-full', healthScoreDetail?.has_gong ? 'bg-emerald-500' : 'bg-slate-400')} />
+                    Gong
+                  </div>
                 </div>
                 <div className="text-[10px] text-slate-400">
                   {healthScoreDetail?.scoring_version || 'v1.0'}
