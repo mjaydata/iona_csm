@@ -30,6 +30,7 @@ class HealthScoreDetail(BaseModel):
     factors: List[HealthScoreFactor] = []
     has_pendo: bool = False  # Whether Pendo data is available
     has_freshdesk: bool = False  # Whether Freshdesk data is available
+    has_gong: bool = False  # Whether Gong call data is available
     scoring_version: str = "rule-based-v1.0"
 
 

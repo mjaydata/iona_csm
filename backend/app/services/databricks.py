@@ -899,6 +899,7 @@ class DatabricksService:
             factors=factors,
             has_pendo=has_pendo,
             has_freshdesk=has_freshdesk,
+            has_gong=gong_data is not None,
             scoring_version="rule-based-v1.4"
         )
 
@@ -918,7 +919,7 @@ class DatabricksService:
             
             # Get the latest scores (most recent score_date)
             query = f"""
-                SELECT 
+                SELECT
                     account_id,
                     account_name,
                     health_score,
@@ -930,7 +931,10 @@ class DatabricksService:
                     open_high,
                     open_total,
                     has_pendo,
-                    has_freshdesk
+                    has_freshdesk,
+                    risk_signal_calls,
+                    engagement_signal_calls,
+                    has_gong
                 FROM {HEALTH_SCORES_TABLE}
                 WHERE score_date = (SELECT MAX(score_date) FROM {HEALTH_SCORES_TABLE})
             """
@@ -954,7 +958,10 @@ class DatabricksService:
                 open_total = int(row[9]) if row[9] is not None else 0
                 has_pendo = bool(row[10]) if row[10] is not None else False
                 has_freshdesk = bool(row[11]) if row[11] is not None else False
-                
+                risk_signal_calls = int(row[12]) if row[12] is not None else -1
+                engagement_signal_calls = int(row[13]) if row[13] is not None else -1
+                has_gong = bool(row[14]) if row[14] is not None else False
+
                 # Map category string to enum
                 if health_category_str == "Critical":
                     category = HealthScore.CRITICAL
@@ -962,7 +969,7 @@ class DatabricksService:
                     category = HealthScore.AT_RISK
                 else:
                     category = HealthScore.GOOD
-                
+
                 # Reconstruct factors from pre-computed data
                 factors = self._reconstruct_health_factors(
                     renewal_days=renewal_days,
@@ -973,6 +980,9 @@ class DatabricksService:
                     open_total=open_total,
                     has_pendo=has_pendo,
                     has_freshdesk=has_freshdesk,
+                    risk_signal_calls=risk_signal_calls,
+                    engagement_signal_calls=engagement_signal_calls,
+                    has_gong=has_gong,
                 )
                 
                 result[account_id] = HealthScoreDetail(
@@ -981,6 +991,7 @@ class DatabricksService:
                     factors=factors,
                     has_pendo=has_pendo,
                     has_freshdesk=has_freshdesk,
+                    has_gong=has_gong,
                     scoring_version="precomputed-v1.0"
                 )
             
@@ -1001,6 +1012,9 @@ class DatabricksService:
         open_total: int,
         has_pendo: bool,
         has_freshdesk: bool,
+        risk_signal_calls: int = -1,
+        engagement_signal_calls: int = -1,
+        has_gong: bool = False,
     ) -> List[HealthScoreFactor]:
         """
         Reconstruct health score factors from pre-computed metrics.
@@ -1093,7 +1107,35 @@ class DatabricksService:
             detail=support_detail,
             icon="🎫"
         ))
-        
+
+        # 4. GONG SENTIMENT (max 15 point deduction)
+        if has_gong and risk_signal_calls >= 0:
+            r = risk_signal_calls
+            e = engagement_signal_calls if engagement_signal_calls >= 0 else 0
+            total = r + e
+            if total == 0:
+                gong_pts = 3
+                gong_detail = "Calls recorded but no notable topics detected."
+            elif r == 0:
+                gong_pts = 0
+                gong_detail = f"Positive signals in {e} call(s) — champion/value topics."
+            elif e == 0:
+                gong_pts = 15
+                gong_detail = f"Risk topics in {r} call(s) with no positive signals."
+            elif r > e:
+                gong_pts = 10
+                gong_detail = f"Risk signals outweigh positive — {r} risk vs {e} engagement calls."
+            else:
+                gong_pts = 5
+                gong_detail = f"Mixed signals — {r} risk, {e} engagement calls."
+            factors.append(HealthScoreFactor(
+                name="Gong Sentiment",
+                points=gong_pts,
+                max_points=15,
+                detail=gong_detail,
+                icon="📞",
+            ))
+
         return factors
 
     def _get_all_pendo_metrics_batch(self, conn, account_names: List[str]) -> dict:
