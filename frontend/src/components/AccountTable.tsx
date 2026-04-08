@@ -214,6 +214,7 @@ function HealthBadgeWithSignal({
     }>
     has_pendo: boolean
     has_freshdesk: boolean
+    has_gong?: boolean
     scoring_version: string
   }
   accountId: string
