@@ -8,9 +8,10 @@ import {
   ChevronLeft,
   ChevronRight,
   ThumbsUp,
+  LayoutDashboard,
 } from 'lucide-react'
 
-export type NavItem = 'home' | 'csm-management' | 'actions' | 'nps-satisfaction' | 'chat'
+export type NavItem = 'home' | 'csm-management' | 'actions' | 'nps-satisfaction' | 'sun-token-dashboard' | 'chat'
 
 interface SidebarProps {
   activeItem: NavItem
@@ -33,6 +34,7 @@ const navItems: NavItemConfig[] = [
   { id: 'csm-management', icon: <Users className="w-5 h-5" />, label: 'CSM Assignments' },
   { id: 'actions', icon: <Bell className="w-5 h-5" />, label: 'Actions' },
   { id: 'nps-satisfaction', icon: <ThumbsUp className="w-5 h-5" />, label: 'NPS & Satisfaction' },
+  { id: 'sun-token-dashboard', icon: <LayoutDashboard className="w-5 h-5" />, label: 'SUN Token Dashboard' },
   { id: 'chat', icon: <MessageCircle className="w-5 h-5" />, label: 'Ask Genie' },
 ]
 
