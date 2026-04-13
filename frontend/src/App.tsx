@@ -17,6 +17,7 @@ const CURRENT_USER = {
 
 const GENIE_URL = 'https://dbc-97a2feb3-3e52.cloud.databricks.com/genie/rooms/01f099415bb81fdca08095d22b5c146a?o=1057997375544232'
 const NPS_DASHBOARD_URL = 'https://dbc-97a2feb3-3e52.cloud.databricks.com/embed/dashboardsv3/01f122cf0fcd1a4fa2ad740905887fa2?o=1057997375544232'
+const SUN_TOKEN_DASHBOARD_URL = 'https://dbc-97a2feb3-3e52.cloud.databricks.com/embed/dashboardsv3/01f1344b530f1afd9f30e82215301fbf?o=1057997375544232'
 
 // Base account type options
 const BASE_ACCOUNT_TYPES = [
@@ -55,15 +56,14 @@ function App() {
   }, [])
 
   const handleNavigate = useCallback((item: NavItem) => {
-    if (item !== 'chat') {
-      setActiveNav(item)
-      // Clear search and selected account when navigating away from home
-      if (item !== 'home') {
-        setSearchTerm('')
-        setSelectedAccountId(null)
-        setShowARRAnalysis(false)
-        setShowCustomerGrowth(false)
-      }
+    if (item === 'chat') return
+    setActiveNav(item)
+    // Clear search and selected account when navigating away from home
+    if (item !== 'home') {
+      setSearchTerm('')
+      setSelectedAccountId(null)
+      setShowARRAnalysis(false)
+      setShowCustomerGrowth(false)
     }
   }, [])
 
@@ -114,6 +114,7 @@ function App() {
     'csm-management': 'CSM Assignments',
     'actions': 'Actions',
     'nps-satisfaction': 'NPS & Satisfaction',
+    'sun-token-dashboard': 'SUN Token Dashboard',
     'chat': 'Ask Genie',
   }
 
@@ -189,6 +190,18 @@ function App() {
             />
           </main>
         )}
+
+        {activeNav === 'sun-token-dashboard' && (
+          <main className="flex-1 overflow-hidden">
+            <iframe
+              src={SUN_TOKEN_DASHBOARD_URL}
+              title="SUN Token Dashboard"
+              className="w-full h-full border-0"
+              allow="fullscreen"
+            />
+          </main>
+        )}
+
       </>
     )
   }
