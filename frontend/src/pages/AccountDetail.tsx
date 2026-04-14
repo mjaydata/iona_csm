@@ -3,7 +3,9 @@ import {
   ArrowLeft, 
   Bell,
   Calendar, 
+  Check,
   FileText, 
+  Link2,
   Loader2
 } from 'lucide-react'
 import { useAccountFullDetail } from '../hooks/useAccounts'
@@ -52,6 +54,16 @@ export function AccountDetail({ accountId, onBack }: AccountDetailProps) {
   // Weekly summary drawer
   const [summaryOpen, setSummaryOpen] = useState(false)
   const [renewalInsightOpen, setRenewalInsightOpen] = useState(false)
+
+  // Share link feedback
+  const [copied, setCopied] = useState(false)
+  const handleShareLink = () => {
+    const url = `${window.location.origin}${window.location.pathname}#/accounts/${encodeURIComponent(accountId)}`
+    navigator.clipboard.writeText(url).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }
   
   // Generate QBR handler - directly generates PowerPoint
   const handleGenerateQBR = async () => {
@@ -196,6 +208,14 @@ export function AccountDetail({ accountId, onBack }: AccountDetailProps) {
 
           {/* Right: Actions */}
           <div className="flex items-center gap-2">
+            <button
+              onClick={handleShareLink}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors"
+              title="Copy link to this account"
+            >
+              {copied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Link2 className="w-3.5 h-3.5" />}
+              {copied ? 'Copied!' : 'Share'}
+            </button>
             <button
               onClick={() => setSummaryOpen(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors"

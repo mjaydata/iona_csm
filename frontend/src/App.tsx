@@ -9,8 +9,8 @@ import PortfolioAnalytics from './pages/PortfolioAnalytics'
 import { Header } from './components/Header'
 import { Sidebar, type NavItem } from './components/Sidebar'
 import { useAccountTypeCounts } from './hooks/useAccounts'
+import { useHashRoute } from './hooks/useHashRoute'
 
-// TODO: Replace with actual authenticated user info
 const CURRENT_USER = {
   email: 'misagh.jebeli@ifs.com',
   initials: 'MJ',
@@ -20,7 +20,6 @@ const GENIE_URL = 'https://dbc-97a2feb3-3e52.cloud.databricks.com/genie/rooms/01
 const NPS_DASHBOARD_URL = 'https://dbc-97a2feb3-3e52.cloud.databricks.com/embed/dashboardsv3/01f122cf0fcd1a4fa2ad740905887fa2?o=1057997375544232'
 const SUN_TOKEN_DASHBOARD_URL = 'https://dbc-97a2feb3-3e52.cloud.databricks.com/embed/dashboardsv3/01f1344b530f1afd9f30e82215301fbf?o=1057997375544232'
 
-// Base account type options
 const BASE_ACCOUNT_TYPES = [
   { value: 'all', label: 'All Accounts', key: 'all' },
   { value: 'Customer', label: 'Customers', key: 'Customer' },
@@ -31,14 +30,15 @@ const BASE_ACCOUNT_TYPES = [
 ]
 
 function App() {
+  const { route, navigateTo, openAccount, openSubPage, goHome } = useHashRoute()
+
   const [searchTerm, setSearchTerm] = useState('')
-  const [activeNav, setActiveNav] = useState<NavItem>('home')
-  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null)
-  const [showARRAnalysis, setShowARRAnalysis] = useState(false)
-  const [showCustomerGrowth, setShowCustomerGrowth] = useState(false)
-  const [accountTypeFilter, setAccountTypeFilter] = useState('Customer') // Default to Customers for CSMs
+  const [accountTypeFilter, setAccountTypeFilter] = useState('Customer')
   const [sidebarExpanded, setSidebarExpanded] = useState(false)
   const queryClient = useQueryClient()
+
+  const activeNav = route.nav
+  const selectedAccountId = route.accountId
 
   const handleAccountTypeChange = useCallback((value: string) => {
     queryClient.cancelQueries({ queryKey: ['accounts-infinite'] })
@@ -51,7 +51,6 @@ function App() {
   useEffect(() => { setCountsReady(true) }, [])
   const { data: accountTypeCounts } = useAccountTypeCounts(countsReady)
 
-  // Build account type options with counts
   const accountTypeOptions = useMemo(() => {
     return BASE_ACCOUNT_TYPES.map((t) => {
       const count = accountTypeCounts?.[t.key]
@@ -69,47 +68,39 @@ function App() {
 
   const handleNavigate = useCallback((item: NavItem) => {
     if (item === 'chat') return
-    setActiveNav(item)
-    // Clear search and selected account when navigating away from home
+    navigateTo(item)
     if (item !== 'home') {
       setSearchTerm('')
-      setSelectedAccountId(null)
-      setShowARRAnalysis(false)
-      setShowCustomerGrowth(false)
     }
-  }, [])
+  }, [navigateTo])
 
   const handleOpenARR = useCallback(() => {
-    setShowARRAnalysis(true)
-    setShowCustomerGrowth(false)
-  }, [])
+    openSubPage('arr')
+  }, [openSubPage])
 
   const handleCloseARR = useCallback(() => {
-    setShowARRAnalysis(false)
-  }, [])
+    goHome()
+  }, [goHome])
 
   const handleOpenCustomerGrowth = useCallback(() => {
-    setShowCustomerGrowth(true)
-    setShowARRAnalysis(false)
-  }, [])
+    openSubPage('growth')
+  }, [openSubPage])
 
   const handleCloseCustomerGrowth = useCallback(() => {
-    setShowCustomerGrowth(false)
-  }, [])
+    goHome()
+  }, [goHome])
 
   const handleAccountClick = useCallback((accountId: string) => {
-    setSelectedAccountId(accountId)
-  }, [])
+    openAccount(accountId)
+  }, [openAccount])
 
   const handleBackToPortfolio = useCallback(() => {
-    setSelectedAccountId(null)
-  }, [])
+    goHome()
+  }, [goHome])
 
   const handleOpenChat = useCallback(() => {
-    // Wide popup - 55% of screen width, nearly full height
     const width = Math.max(900, Math.floor(window.screen.availWidth * 0.55))
     const height = Math.floor(window.screen.availHeight * 0.92)
-    // Position on right side of screen, vertically centered
     const left = window.screen.availWidth - width - 10
     const top = Math.floor((window.screen.availHeight - height) / 2)
 
@@ -132,8 +123,8 @@ function App() {
 
   const isHome = activeNav === 'home'
   const homeSubPage = isHome && selectedAccountId ? 'account'
-    : isHome && showARRAnalysis ? 'arr'
-    : isHome && showCustomerGrowth ? 'growth'
+    : isHome && route.subPage === 'arr' ? 'arr'
+    : isHome && route.subPage === 'growth' ? 'growth'
     : null
   const showDashboard = isHome && !homeSubPage
 
