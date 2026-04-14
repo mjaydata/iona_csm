@@ -38,9 +38,13 @@ const navItems: NavItemConfig[] = [
   {
     id: 'sun-token-dashboard',
     icon: (
-      <span className="flex items-center justify-center gap-0.5 w-5 h-5" aria-hidden>
-        <Sun className="w-[14px] h-[14px] shrink-0" strokeWidth={2.25} />
-        <Coins className="w-[14px] h-[14px] shrink-0" strokeWidth={2.25} />
+      <span
+        className="flex flex-col items-center justify-center w-5 h-5 gap-0 leading-none"
+        aria-hidden
+        title="SUN Token"
+      >
+        <Sun className="w-[15px] h-[15px] shrink-0 -mb-px" strokeWidth={2.35} />
+        <Coins className="w-[13px] h-[13px] shrink-0" strokeWidth={2.35} />
       </span>
     ),
     label: 'SUN Token Dashboard',
