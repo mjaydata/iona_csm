@@ -8,10 +8,12 @@ export function useCSMStats(params: GetCSMStatsParams = {}) {
   })
 }
 
-export function useCSMs(params: GetCSMsParams = {}) {
+export function useCSMs(params: GetCSMsParams = {}, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ['csms', params],
     queryFn: () => getCSMs(params),
+    enabled: options?.enabled ?? true,
+    staleTime: 5 * 60 * 1000,
   })
 }
 

@@ -38,9 +38,10 @@ export function Dashboard({ searchTerm, onAccountClick, onOpenARR, onOpenCustome
     renewalPeriod
   )
 
-  // Fetch customer growth data for the Companies card
+  // Defer customer growth until metrics are loaded (secondary data for sparkline/YoY)
   const { data: growthData } = useCustomerGrowth(
-    accountTypeFilter !== 'all' ? accountTypeFilter : undefined
+    accountTypeFilter !== 'all' ? accountTypeFilter : undefined,
+    !metricsLoading
   )
 
   // Build query params based on active tab, KPI filter, search, and account type
@@ -132,8 +133,9 @@ export function Dashboard({ searchTerm, onAccountClick, onOpenARR, onOpenCustome
     ? (allAccountsData?.accounts ?? [])
     : paginatedAccounts
 
-  // Fetch full CSM list from API (independent of lazy-loaded accounts)
-  const { data: csmListData } = useCSMs({ status: 'active' })
+  // Defer CSM list until user opens the dropdown (avoids an API call on initial load)
+  const [csmListRequested, setCsmListRequested] = useState(false)
+  const { data: csmListData } = useCSMs({ status: 'active' }, { enabled: csmListRequested })
   const allCSMNames = useMemo(() => {
     if (!csmListData?.csms) return []
     return csmListData.csms.map(c => c.name).sort()
@@ -232,7 +234,7 @@ export function Dashboard({ searchTerm, onAccountClick, onOpenARR, onOpenCustome
             {/* CSM Filter Dropdown */}
             <div className="relative">
               <button
-                onClick={() => { setCsmDropdownOpen(!csmDropdownOpen); setCsmSearch('') }}
+                onClick={() => { setCsmDropdownOpen(!csmDropdownOpen); setCsmSearch(''); if (!csmListRequested) setCsmListRequested(true) }}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors ${
                   csmFilter
                     ? 'bg-primary-50 text-primary-700 border border-primary-200'
@@ -296,8 +298,25 @@ export function Dashboard({ searchTerm, onAccountClick, onOpenARR, onOpenCustome
         {/* Table Content */}
         <div>
           {(needsAllAccounts ? allAccountsLoading : accountsLoading) ? (
-            <div className="flex items-center justify-center py-16">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+            <div className="divide-y divide-slate-100">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-4 px-5 py-3 animate-pulse">
+                  <div className="w-2 h-2 rounded-full bg-slate-200" />
+                  <div className="h-4 w-36 bg-slate-200 rounded" />
+                  <div className="h-5 w-16 bg-slate-100 rounded-full" />
+                  <div className="flex items-center gap-2 ml-4">
+                    <div className="w-6 h-6 rounded-full bg-slate-200" />
+                    <div className="h-3 w-20 bg-slate-200 rounded" />
+                  </div>
+                  <div className="flex items-center gap-2 ml-4">
+                    <div className="w-6 h-6 rounded-full bg-slate-100" />
+                    <div className="h-3 w-20 bg-slate-100 rounded" />
+                  </div>
+                  <div className="flex-1 ml-4">
+                    <div className="h-3 w-full max-w-[300px] bg-slate-100 rounded" />
+                  </div>
+                </div>
+              ))}
             </div>
           ) : (
             <AccountTable

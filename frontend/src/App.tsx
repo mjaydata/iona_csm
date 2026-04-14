@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useEffect } from 'react'
 import { Dashboard } from './pages/Dashboard'
 import { ManageCSM } from './pages/ManageCSM'
 import { Actions } from './pages/Actions'
@@ -37,7 +37,9 @@ function App() {
   const [showCustomerGrowth, setShowCustomerGrowth] = useState(false)
   const [accountTypeFilter, setAccountTypeFilter] = useState('Customer') // Default to Customers for CSMs
   const [sidebarExpanded, setSidebarExpanded] = useState(false)
-  const { data: accountTypeCounts } = useAccountTypeCounts()
+  const [countsReady, setCountsReady] = useState(false)
+  useEffect(() => { setCountsReady(true) }, [])
+  const { data: accountTypeCounts } = useAccountTypeCounts(countsReady)
 
   // Build account type options with counts
   const accountTypeOptions = useMemo(() => {

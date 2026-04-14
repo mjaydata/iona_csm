@@ -6,14 +6,16 @@ export function useMetrics(accountType?: string, renewalPeriod?: number) {
   return useQuery({
     queryKey: ['metrics', accountType, renewalPeriod],
     queryFn: () => getMetricsSummary(accountType, renewalPeriod),
+    staleTime: 2 * 60 * 1000,
   })
 }
 
-export function useAccountTypeCounts() {
+export function useAccountTypeCounts(enabled = true) {
   return useQuery({
     queryKey: ['account-type-counts'],
     queryFn: () => getAccountTypeCounts(),
-    staleTime: 5 * 60 * 1000, // cache for 5 minutes
+    staleTime: 5 * 60 * 1000,
+    enabled,
   })
 }
 
@@ -67,6 +69,7 @@ export function useInfiniteAccounts(params: Omit<GetAccountsParams, 'page'> = {}
       }
       return allPages.length + 1
     },
+    staleTime: 2 * 60 * 1000,
   })
 }
 
@@ -97,11 +100,12 @@ export function useCreateTask() {
 }
 
 // Customer Growth hooks
-export function useCustomerGrowth(accountType?: string) {
+export function useCustomerGrowth(accountType?: string, enabled = true) {
   return useQuery({
     queryKey: ['customer-growth', accountType],
     queryFn: () => getCustomerGrowth(accountType),
     staleTime: 5 * 60 * 1000,
+    enabled,
   })
 }
 

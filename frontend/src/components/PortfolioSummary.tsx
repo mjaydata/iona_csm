@@ -300,6 +300,7 @@ export function PortfolioSummary({ metrics, isLoading, onOpenARR, onOpenCustomer
     queryKey: ['health-delta'],
     queryFn: () => getHealthChanges(2),
     staleTime: 10 * 60 * 1000,
+    enabled: !isLoading,
   })
   const healthDelta = healthChanges?.today_delta ?? null
 
