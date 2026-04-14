@@ -8,7 +8,8 @@ import {
   ChevronLeft,
   ChevronRight,
   ThumbsUp,
-  LayoutDashboard,
+  Sun,
+  Coins,
 } from 'lucide-react'
 
 export type NavItem = 'home' | 'csm-management' | 'actions' | 'nps-satisfaction' | 'sun-token-dashboard' | 'chat'
@@ -34,7 +35,16 @@ const navItems: NavItemConfig[] = [
   { id: 'csm-management', icon: <Users className="w-5 h-5" />, label: 'CSM Assignments' },
   { id: 'actions', icon: <Bell className="w-5 h-5" />, label: 'Actions' },
   { id: 'nps-satisfaction', icon: <ThumbsUp className="w-5 h-5" />, label: 'NPS & Satisfaction' },
-  { id: 'sun-token-dashboard', icon: <LayoutDashboard className="w-5 h-5" />, label: 'SUN Token Dashboard' },
+  {
+    id: 'sun-token-dashboard',
+    icon: (
+      <span className="flex items-center justify-center gap-0.5 w-5 h-5" aria-hidden>
+        <Sun className="w-[14px] h-[14px] shrink-0" strokeWidth={2.25} />
+        <Coins className="w-[14px] h-[14px] shrink-0" strokeWidth={2.25} />
+      </span>
+    ),
+    label: 'SUN Token Dashboard',
+  },
   { id: 'chat', icon: <MessageCircle className="w-5 h-5" />, label: 'Ask Genie' },
 ]
 

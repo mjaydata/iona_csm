@@ -370,6 +370,7 @@ export function DraggableWidgetGrid({
             <div className="px-4 py-3 bg-slate-50 border-b border-slate-200">
               <p className="text-xs text-slate-500 mb-2">
                 Drag widgets to reorder. Click eye to hide/show. Use resize controls on hover.
+                Layout packs rows tightly and may fill gaps below a wide card while keeping your order.
               </p>
               
               {hiddenWidgets.length > 0 && (
@@ -416,7 +417,7 @@ export function DraggableWidgetGrid({
       >
         <SortableContext items={widgetIds} strategy={rectSortingStrategy}>
           <div className="p-4 pb-32">
-            <div className="grid grid-cols-12 gap-4 auto-rows-min">
+            <div className="grid grid-cols-12 gap-4 auto-rows-min [grid-auto-flow:row_dense]">
               {visibleWidgets.map((widget) => {
                 const layoutItem = layout.find(l => l.id === widget.id)
                 if (!layoutItem) return null

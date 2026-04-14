@@ -43,13 +43,14 @@ export function SortableWidget({
     zIndex: isDragging ? 50 : undefined,
   }
 
+  /** 12-column grid: spans chosen so 3×narrow, 2×half, 1×wide+1×narrow sum to 12 at lg+. */
   const getColSpan = (s: WidgetSize) => {
     switch (s) {
       case 1: return 'col-span-12 sm:col-span-6 lg:col-span-3'
-      case 2: return 'col-span-12 md:col-span-6'
+      case 2: return 'col-span-12 lg:col-span-6'
       case 3: return 'col-span-12 lg:col-span-9'
       case 4: return 'col-span-12'
-      default: return 'col-span-12 md:col-span-6 lg:col-span-4'
+      default: return 'col-span-12 lg:col-span-6'
     }
   }
 
@@ -96,7 +97,7 @@ export function SortableWidget({
       style={{ ...style, ...getHeightStyle(heightSize) }}
       className={clsx(
         getColSpan(size),
-        'relative group transition-all duration-200',
+        'relative min-w-0 group transition-all duration-200',
         isDragging && 'opacity-50 scale-[1.02] shadow-2xl rounded-xl'
       )}
     >
