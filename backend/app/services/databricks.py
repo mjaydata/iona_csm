@@ -3,6 +3,7 @@
 import logging
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from typing import Any, Generator, List, Optional, Tuple
@@ -3830,7 +3831,7 @@ class DatabricksService:
                 cursor.execute(f"""
                     SELECT
                         dla.id,
-                        dla.title,
+                        dla.name,
                         dla.url,
                         dla.state,
                         dla.document_type
@@ -3840,7 +3841,7 @@ class DatabricksService:
                     WHERE dc.account = '{safe_name}'
                       AND dla.url IS NOT NULL
                       AND dla.state = 'import_complete'
-                    ORDER BY dla.title
+                    ORDER BY dla.name
                 """)
                 rows = cursor.fetchall()
                 cursor.close()
@@ -5022,11 +5023,22 @@ class DatabricksService:
             return None
 
     def _build_full_detail_with_real_account(self, account_detail: AccountDetail) -> AccountFullDetail:
-        """Build full detail response using real account header + placeholder widget data."""
-        today = date.today()
+        """Build full detail response using real account header + parallel widget data fetches."""
         now = datetime.now()
 
-        gong_activity = self._fetch_gong_activity(account_detail.id)
+        # Run all independent data fetches in parallel (each opens its own DB connection)
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            gong_future = pool.submit(self._fetch_gong_activity, account_detail.id)
+            support_future = pool.submit(self.get_support_analysis, account_detail.name)
+            pendo_future = pool.submit(self._fetch_pendo_usage, account_detail.name)
+            contract_future = pool.submit(self._fetch_contract_context, account_detail)
+
+            gong_activity = gong_future.result()
+            support_analysis = support_future.result()
+            usage_analysis = pendo_future.result()
+            contract = contract_future.result()
+
+        logger.info(f"Parallel widget fetches complete for {account_detail.id}")
 
         health_breakdown = HealthBreakdown(
             overall_score=74,
@@ -5042,16 +5054,10 @@ class DatabricksService:
             ]
         )
 
-        support_analysis = self.get_support_analysis(account_detail.name)
-
-        usage_analysis = self._fetch_pendo_usage(account_detail.name)
-
         whitespace = WhitespaceAnalysis(
             total_licenses=0, used_licenses=0, utilization_percent=0,
             products=[], expansion_opportunities=[]
         )
-
-        contract = self._fetch_contract_context(account_detail)
 
         risk_assessment = RiskAssessment(
             churn_risk_score=0, renewal_risk_score=0,

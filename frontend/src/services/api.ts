@@ -74,8 +74,8 @@ export async function getAccountById(id: string) {
   return data
 }
 
-export async function getAccountFullDetail(id: string): Promise<AccountFullDetail> {
-  const { data } = await api.get<AccountFullDetail>(`/accounts/${id}/full-detail`)
+export async function getAccountFullDetail(id: string, signal?: AbortSignal): Promise<AccountFullDetail> {
+  const { data } = await api.get<AccountFullDetail>(`/accounts/${id}/full-detail`, { signal })
   return data
 }
 

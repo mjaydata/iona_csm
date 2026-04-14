@@ -30,8 +30,9 @@ export function useAccounts(params: GetAccountsParams = {}, enabled = true) {
 export function useAccountFullDetail(accountId: string | null) {
   return useQuery({
     queryKey: ['account-detail', accountId],
-    queryFn: () => getAccountFullDetail(accountId!),
+    queryFn: ({ signal }) => getAccountFullDetail(accountId!, signal),
     enabled: !!accountId,
+    staleTime: 2 * 60 * 1000,
   })
 }
 
