@@ -127,32 +127,23 @@ The Vite dev server automatically proxies `/api/*` requests to the backend.
 
 ## Deploying to Databricks Apps
 
-### 1. Build the Frontend
+**Git push does not deploy the app.** You must build and deploy separately. See **`DEPLOYMENT.md`** for the full UI path.
+
+**Quick path (Databricks CLI installed and `databricks auth login` done):**
 
 ```bash
 cd frontend
-npm run build:prod
+npm run deploy:databricks
 ```
 
-This outputs the React build to `backend/static/`.
+That runs `build:prod`, syncs `backend/` to the workspace bundle path, and deploys app **`iona-cx`**.
 
-### 2. Deploy via Databricks CLI
+### Configure the app (Databricks)
 
-```bash
-# Login to Databricks
-databricks auth login
+- **`DATABRICKS_HOST`** is provided by Databricks Apps at runtime.
+- Attach the **SQL warehouse** resource to the app (see `backend/app.yaml` / bundle config).
 
-# Deploy the app
-databricks apps deploy csm-dashboard --source-code-path ./backend
-```
-
-### 3. Configure Environment Variables
-
-In Databricks, set up secrets for:
-- `DATABRICKS_HOST`
-- `DATABRICKS_HTTP_PATH`
-
-The app will use service principal authentication when running in Databricks Apps.
+The app uses service principal authentication when running in Databricks Apps.
 
 ## Development Notes
 

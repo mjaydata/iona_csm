@@ -1,5 +1,18 @@
 # IONA CX - Databricks Apps Deployment Guide
 
+## Not automatic
+
+**Pushing to GitHub does not update the Databricks app.** There is no CI hook in this repo that builds or deploys for you. After you merge or pull code, you must:
+
+1. **Build** the frontend into `backend/static/` (`npm run build:prod` from `frontend/`).
+2. **Deploy** that folder to Databricks (CLI sync + app deploy, or manual upload + Deploy in the UI).
+
+Until you do both, the live app keeps the **previous** deployment (e.g. “last deployment 6 hours ago”).
+
+**One command (from `frontend/`, Databricks CLI logged in):** `npm run deploy:databricks`
+
+---
+
 ## Deployment Files Ready
 
 The app is ready for deployment with the following structure:
@@ -19,9 +32,28 @@ backend/
 └── requirements.txt       # Python dependencies
 ```
 
+## Deploy via Databricks CLI (recommended when CLI works)
+
+From repo root, after `databricks auth login` and profile pointing at the right workspace:
+
+```bash
+cd frontend
+npm run build:prod
+cd ../backend
+databricks bundle sync -t prod --full
+databricks apps deploy iona-cx --source-code-path "/Workspace/Users/misagh.jebeli@ifs.com/.bundle/iona_cx_bundle/prod/files"
+```
+
+- **`bundle sync`** uploads `backend/` (including `static/`) to the bundle path in the workspace.
+- **`apps deploy`** creates a new deployment for app **`iona-cx`** from that path.
+
+`databricks bundle deploy` may fail if Terraform cannot reach `registry.terraform.io`; **`bundle sync` + `apps deploy`** still updates the running app.
+
+---
+
 ## Deploy via Databricks UI
 
-Since the Databricks CLI is blocked by Application Control policy, follow these steps to deploy via the UI:
+If the Databricks CLI is blocked by policy, use the UI instead:
 
 ### Step 1: Upload Files to Workspace
 
@@ -73,7 +105,10 @@ Authentication is handled automatically by Databricks Apps using the app's servi
 ## Updating the App
 
 To update after making changes:
-1. Rebuild frontend: `cd frontend && npm run build`
-2. Copy to backend: `cp -r dist/* ../backend/static/`
-3. Re-upload changed files to Databricks workspace
-4. Click **Deploy** again in the Apps page
+
+**CLI:** `cd frontend && npm run deploy:databricks` (or the four commands in the CLI section above).
+
+**UI:**  
+1. `cd frontend && npm run build:prod` (writes to `../backend/static/`).  
+2. Re-upload `backend/app/`, `backend/static/`, `backend/app.yaml`, `backend/requirements.txt` (and `backend/databricks.yml` if you use bundle sync from elsewhere).  
+3. **Compute → Apps → iona-cx → Deploy** and select the workspace folder you updated.

@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "build:prod": "tsc && vite build --outDir ../backend/static",
+    "deploy:databricks": "npm run build:prod && cd ../backend && databricks bundle sync -t prod --full && databricks apps deploy iona-cx --source-code-path \"/Workspace/Users/misagh.jebeli@ifs.com/.bundle/iona_cx_bundle/prod/files\"",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview"
   },
