@@ -26,11 +26,11 @@ const api = axios.create({
 })
 
 // Metrics
-export async function getMetricsSummary(accountType?: string, renewalPeriod?: number): Promise<MetricsSummary> {
+export async function getMetricsSummary(accountType?: string, renewalPeriod?: number, signal?: AbortSignal): Promise<MetricsSummary> {
   const params: Record<string, string | number> = {}
   if (accountType) params.account_type = accountType
   if (renewalPeriod) params.renewal_period = renewalPeriod
-  const { data } = await api.get<MetricsSummary>('/metrics/summary', { params })
+  const { data } = await api.get<MetricsSummary>('/metrics/summary', { params, signal })
   return data
 }
 
@@ -39,9 +39,9 @@ export async function getAccountTypeCounts(): Promise<Record<string, number>> {
   return data
 }
 
-export async function getCustomerGrowth(accountType?: string): Promise<CustomerGrowthResponse> {
+export async function getCustomerGrowth(accountType?: string, signal?: AbortSignal): Promise<CustomerGrowthResponse> {
   const params = accountType ? { account_type: accountType } : undefined
-  const { data } = await api.get<CustomerGrowthResponse>('/metrics/customer-growth', { params })
+  const { data } = await api.get<CustomerGrowthResponse>('/metrics/customer-growth', { params, signal })
   return data
 }
 
@@ -64,8 +64,8 @@ export interface GetAccountsParams {
   account_type?: string
 }
 
-export async function getAccounts(params: GetAccountsParams = {}): Promise<AccountListResponse> {
-  const { data } = await api.get<AccountListResponse>('/accounts', { params })
+export async function getAccounts(params: GetAccountsParams = {}, signal?: AbortSignal): Promise<AccountListResponse> {
+  const { data } = await api.get<AccountListResponse>('/accounts', { params, signal })
   return data
 }
 

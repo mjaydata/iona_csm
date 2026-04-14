@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { Dashboard } from './pages/Dashboard'
 import { ManageCSM } from './pages/ManageCSM'
 import { Actions } from './pages/Actions'
@@ -37,6 +38,15 @@ function App() {
   const [showCustomerGrowth, setShowCustomerGrowth] = useState(false)
   const [accountTypeFilter, setAccountTypeFilter] = useState('Customer') // Default to Customers for CSMs
   const [sidebarExpanded, setSidebarExpanded] = useState(false)
+  const queryClient = useQueryClient()
+
+  const handleAccountTypeChange = useCallback((value: string) => {
+    queryClient.cancelQueries({ queryKey: ['accounts-infinite'] })
+    queryClient.cancelQueries({ queryKey: ['accounts'] })
+    queryClient.cancelQueries({ queryKey: ['metrics'] })
+    queryClient.cancelQueries({ queryKey: ['customer-growth'] })
+    setAccountTypeFilter(value)
+  }, [queryClient])
   const [countsReady, setCountsReady] = useState(false)
   useEffect(() => { setCountsReady(true) }, [])
   const { data: accountTypeCounts } = useAccountTypeCounts(countsReady)
@@ -228,7 +238,7 @@ function App() {
           onSearchChange={handleSearchChange}
           showSearch={activeNav === 'home'}
           accountTypeFilter={accountTypeFilter}
-          onAccountTypeChange={setAccountTypeFilter}
+          onAccountTypeChange={handleAccountTypeChange}
           accountTypeOptions={accountTypeOptions}
           pageTitle={PAGE_TITLES[activeNav]}
           showAccountTypeFilter={activeNav === 'home' || activeNav === 'csm-management'}

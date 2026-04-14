@@ -5,7 +5,7 @@ import type { TaskCreate } from '../types'
 export function useMetrics(accountType?: string, renewalPeriod?: number) {
   return useQuery({
     queryKey: ['metrics', accountType, renewalPeriod],
-    queryFn: () => getMetricsSummary(accountType, renewalPeriod),
+    queryFn: ({ signal }) => getMetricsSummary(accountType, renewalPeriod, signal),
     staleTime: 2 * 60 * 1000,
   })
 }
@@ -22,7 +22,7 @@ export function useAccountTypeCounts(enabled = true) {
 export function useAccounts(params: GetAccountsParams = {}, enabled = true) {
   return useQuery({
     queryKey: ['accounts', params],
-    queryFn: () => getAccounts(params),
+    queryFn: ({ signal }) => getAccounts(params, signal),
     enabled,
   })
 }
@@ -60,7 +60,7 @@ export function useConfluenceImplementation(accountId: string | null, enabled = 
 export function useInfiniteAccounts(params: Omit<GetAccountsParams, 'page'> = {}) {
   return useInfiniteQuery({
     queryKey: ['accounts-infinite', params],
-    queryFn: ({ pageParam = 1 }) => getAccounts({ ...params, page: pageParam }),
+    queryFn: ({ pageParam = 1, signal }) => getAccounts({ ...params, page: pageParam }, signal),
     initialPageParam: 1,
     getNextPageParam: (lastPage, allPages) => {
       const totalLoaded = allPages.reduce((sum, page) => sum + page.accounts.length, 0)
@@ -103,7 +103,7 @@ export function useCreateTask() {
 export function useCustomerGrowth(accountType?: string, enabled = true) {
   return useQuery({
     queryKey: ['customer-growth', accountType],
-    queryFn: () => getCustomerGrowth(accountType),
+    queryFn: ({ signal }) => getCustomerGrowth(accountType, signal),
     staleTime: 5 * 60 * 1000,
     enabled,
   })
