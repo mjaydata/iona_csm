@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useRef } from 'react'
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, TrendingUp, TrendingDown, Loader2, Shield, AlertTriangle, XCircle, Search, X } from 'lucide-react'
 import { getHealthChanges, type HealthChangeDay, type AccountMovement } from '../services/api'
@@ -249,7 +249,7 @@ function DaySection({ day, index, onAccountClick, searchFilter }: { day: HealthC
   const [expanded, setExpanded] = useState(index === 0)
 
   const filterMovements = (list: AccountMovement[]) => {
-    if (!searchFilter) return list
+    if (!searchFilter.trim()) return list
     const q = searchFilter.toLowerCase()
     return list.filter(m => m.account_name.toLowerCase().includes(q))
   }
@@ -259,8 +259,18 @@ function DaySection({ day, index, onAccountClick, searchFilter }: { day: HealthC
   const totalFiltered = filteredImproved.length + filteredWorsened.length
   const totalMovements = day.improved.length + day.worsened.length
 
+  useEffect(() => {
+    if (!day.prev_date) return
+    const q = searchFilter.trim()
+    if (!q) {
+      setExpanded(index === 0)
+      return
+    }
+    if (totalFiltered > 0) setExpanded(true)
+  }, [searchFilter, index, day.prev_date, totalFiltered])
+
   if (!day.prev_date) return null
-  if (searchFilter && totalFiltered === 0) return null
+  if (searchFilter.trim() && totalFiltered === 0) return null
 
   const summaryParts: string[] = []
   if (day.improved.length > 0) summaryParts.push(`${day.improved.length} improved`)

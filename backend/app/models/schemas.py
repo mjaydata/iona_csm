@@ -467,6 +467,27 @@ class WhitespaceAnalysis(BaseModel):
     expansion_opportunities: List[ExpansionOpportunity] = []
 
 
+class SalesforceLicenseFeature(BaseModel):
+    """One licensable product feature from Salesforce, enriched by dim_license_description."""
+    feature_key: str
+    display_name: str
+    category: Optional[str] = None
+    description: Optional[str] = None
+    is_enabled: bool = False
+
+
+class SalesforceLicensing(BaseModel):
+    """Salesforce license row enriched with dim_license_description metadata."""
+    has_license_row: bool = False
+    license_type: Optional[str] = None
+    salesforce_license_customer_name: Optional[str] = None
+    account_region: Optional[str] = None
+    account_industry: Optional[str] = None
+    features: List[SalesforceLicenseFeature] = []
+    description_catalog_count: int = 0
+    load_error: Optional[str] = None
+
+
 class ContractEvent(BaseModel):
     """Historical contract event."""
     date: date
@@ -748,6 +769,7 @@ class AccountFullDetail(BaseModel):
     meeting_brief: MeetingBrief
     value_realization: ValueRealization
     gong_activity: Optional[GongActivityAnalysis] = None
+    salesforce_licensing: SalesforceLicensing = Field(default_factory=SalesforceLicensing)
 
     # Metadata
     last_updated: datetime

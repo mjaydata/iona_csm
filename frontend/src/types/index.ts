@@ -270,6 +270,7 @@ export type WidgetType =
   | 'alerts'
   | 'signals'
   | 'gong'
+  | 'licensing'
 
 export interface WidgetConfig {
   id: string
@@ -472,6 +473,26 @@ export interface ExpansionOpportunity {
   potential_value: number
   reason: string
   confidence: 'high' | 'medium' | 'low'
+}
+
+// Salesforce Licensing
+export interface SalesforceLicenseFeature {
+  feature_key: string
+  display_name: string
+  category: string | null
+  description: string | null
+  is_enabled: boolean
+}
+
+export interface SalesforceLicensing {
+  has_license_row: boolean
+  license_type: string | null
+  salesforce_license_customer_name: string | null
+  account_region: string | null
+  account_industry: string | null
+  features: SalesforceLicenseFeature[]
+  description_catalog_count: number
+  load_error: string | null
 }
 
 // Contract Group (individual contract within an account)
@@ -696,6 +717,7 @@ export interface AccountFullDetail {
   meeting_brief: MeetingBrief
   value_realization: ValueRealization
   gong_activity: GongActivityAnalysis | null
+  salesforce_licensing?: SalesforceLicensing
 
   // Metadata
   last_updated: string

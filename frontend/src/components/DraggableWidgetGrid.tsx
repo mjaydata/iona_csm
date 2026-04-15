@@ -39,6 +39,7 @@ import {
   AlertsWidget,
   RecentSignalsWidget,
   GongActivityWidget,
+  LicensingWidget,
 } from './widgets'
 import { SortableWidget, WidgetPreview } from './SortableWidget'
 
@@ -60,6 +61,7 @@ import {
   Radio,
   BookOpen,
   PhoneCall,
+  KeyRound,
 } from 'lucide-react'
 
 interface WidgetDefinition {
@@ -101,6 +103,7 @@ const WIDGET_DEFINITIONS: WidgetDefinition[] = [
   { id: 'notes', type: 'notes', title: 'CSM Notes', icon: <StickyNote className="w-4 h-4" />, defaultSize: 1, defaultVisible: false, underDevelopment: true },
   { id: 'signals', type: 'signals', title: 'Recent Signals', icon: <Radio className="w-4 h-4" />, defaultSize: 1, defaultVisible: false, underDevelopment: true },
   { id: 'gong', type: 'gong', title: 'Gong Activity', icon: <PhoneCall className="w-4 h-4" />, defaultSize: 2, defaultVisible: true },
+  { id: 'licensing', type: 'licensing', title: 'Licensing', icon: <KeyRound className="w-4 h-4" />, defaultSize: 1, defaultHeightSize: 3, defaultVisible: true },
 ]
 
 // Helper to check if a widget is under development
@@ -303,6 +306,8 @@ export function DraggableWidgetGrid({
         return <RecentSignalsWidget data={data?.signals} {...commonProps} />
       case 'gong':
         return <GongActivityWidget data={data?.gong_activity} {...commonProps} />
+      case 'licensing':
+        return <LicensingWidget data={data?.salesforce_licensing} {...commonProps} />
       default:
         return null
     }

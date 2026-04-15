@@ -55,6 +55,8 @@ from ..models.schemas import (
     MonthlyGrowthPoint,
     ProductWhitespace,
     RecommendedAction,
+    SalesforceLicenseFeature,
+    SalesforceLicensing,
     RiskAssessment,
     RiskFactor,
     SentimentAnalysis,
@@ -5022,21 +5024,142 @@ class DatabricksService:
             logger.warning(f"_fetch_gong_activity error for {sf_account_id}: {e}")
             return None
 
+    LICENSE_DB_TABLE = "silver.silver_layer.dim_salesforce_license_database"
+    LICENSE_DESC_TABLE = "silver.default.dim_license_description"
+
+    @staticmethod
+    def _license_cell_enabled(value) -> bool:
+        """Determine if a license cell value means 'enabled'."""
+        if value is None:
+            return False
+        if isinstance(value, bool):
+            return value
+        s = str(value).strip().lower()
+        if s in ('', 'false', 'no', 'n', '0', 'nan', 'none', 'null'):
+            return False
+        if s in ('true', 'yes', 'y', '1'):
+            return True
+        try:
+            return float(s) > 0
+        except (ValueError, TypeError):
+            return bool(s)
+
+    def _fetch_salesforce_licensing(self, account_id: str) -> SalesforceLicensing:
+        """Fetch licensing features for an account from dim_salesforce_license_database
+        enriched with dim_license_description."""
+        try:
+            with self.get_connection() as conn:
+                if conn is None:
+                    return SalesforceLicensing(load_error="No DB connection")
+
+                cursor = conn.cursor()
+
+                # 1. Load description catalog (small reference table)
+                cursor.execute(f"SELECT * FROM {self.LICENSE_DESC_TABLE}")
+                desc_cols = [col[0].lower() for col in cursor.description] if cursor.description else []
+                desc_rows = cursor.fetchall()
+
+                catalog: list[dict] = []
+                for row in desc_rows:
+                    rd = dict(zip(desc_cols, row))
+                    catalog.append(rd)
+
+                # 2. Fetch the license row for this account
+                safe_id = self._sql_escape(account_id)
+                cursor.execute(f"""
+                    SELECT l.*, c.account AS account_name, c.region, c.industry
+                    FROM {self.LICENSE_DB_TABLE} l
+                    LEFT JOIN {DIM_CUSTOMERS_TABLE} c
+                      ON l.account_c = c.account_id
+                      AND c._fivetran_deleted = false
+                      AND c.account_type = 'Customer'
+                    WHERE l.account_c = '{safe_id}'
+                      AND l.system_current_flag = 'Y'
+                    LIMIT 1
+                """)
+                lic_cols = [col[0].lower() for col in cursor.description] if cursor.description else []
+                lic_row = cursor.fetchone()
+                cursor.close()
+
+                if not lic_row:
+                    return SalesforceLicensing(
+                        has_license_row=False,
+                        description_catalog_count=len(catalog),
+                    )
+
+                lic = dict(zip(lic_cols, lic_row))
+
+                license_type = lic.get('license_type_c') or lic.get('license_type')
+                sf_name = lic.get('name') or lic.get('customer_name')
+                region = lic.get('region')
+                industry = lic.get('industry')
+
+                # 3. Build features by matching catalog keys to license columns
+                fk_col = next((c for c in desc_cols if c in ('feature_key', 'feature_column', 'column_name')), None)
+                dn_col = next((c for c in desc_cols if c in ('feature_display_name', 'display_name', 'feature_name')), None)
+                cat_col = next((c for c in desc_cols if c in ('feature_category', 'category')), None)
+                # description: try suite first, then h2o, then cnaim, then generic
+                desc_candidates = [c for c in desc_cols if 'description' in c]
+
+                features: list[SalesforceLicenseFeature] = []
+                for entry in catalog:
+                    key = entry.get(fk_col) if fk_col else None
+                    if not key:
+                        continue
+                    display = entry.get(dn_col) if dn_col else key
+                    category = entry.get(cat_col) if cat_col else None
+
+                    desc_text = None
+                    for dc in desc_candidates:
+                        v = entry.get(dc)
+                        if v and str(v).strip() and str(v).strip().lower() not in ('none', 'nan', 'null'):
+                            desc_text = str(v).strip()
+                            break
+
+                    col_key = key.lower()
+                    cell_value = lic.get(col_key)
+                    if cell_value is None and not col_key.endswith('_c'):
+                        cell_value = lic.get(col_key + '_c')
+
+                    features.append(SalesforceLicenseFeature(
+                        feature_key=key,
+                        display_name=display or key,
+                        category=category,
+                        description=desc_text,
+                        is_enabled=self._license_cell_enabled(cell_value),
+                    ))
+
+                return SalesforceLicensing(
+                    has_license_row=True,
+                    license_type=str(license_type) if license_type else None,
+                    salesforce_license_customer_name=str(sf_name) if sf_name else None,
+                    account_region=str(region) if region else None,
+                    account_industry=str(industry) if industry else None,
+                    features=features,
+                    description_catalog_count=len(catalog),
+                )
+
+        except Exception as e:
+            logger.warning(f"_fetch_salesforce_licensing error for {account_id}: {e}")
+            return SalesforceLicensing(load_error=str(e))
+
     def _build_full_detail_with_real_account(self, account_detail: AccountDetail) -> AccountFullDetail:
         """Build full detail response using real account header + parallel widget data fetches."""
         now = datetime.now()
 
         # Run all independent data fetches in parallel (each opens its own DB connection)
-        with ThreadPoolExecutor(max_workers=4) as pool:
+        with ThreadPoolExecutor(max_workers=5) as pool:
             gong_future = pool.submit(self._fetch_gong_activity, account_detail.id)
             support_future = pool.submit(self.get_support_analysis, account_detail.name)
             pendo_future = pool.submit(self._fetch_pendo_usage, account_detail.name)
             contract_future = pool.submit(self._fetch_contract_context, account_detail)
+            licensing_future = pool.submit(self._fetch_salesforce_licensing, account_detail.id)
 
             gong_activity = gong_future.result()
             support_analysis = support_future.result()
             usage_analysis = pendo_future.result()
             contract = contract_future.result()
+            salesforce_licensing = licensing_future.result()
 
         logger.info(f"Parallel widget fetches complete for {account_detail.id}")
 
@@ -5102,6 +5225,7 @@ class DatabricksService:
             meeting_brief=meeting_brief,
             value_realization=value_realization,
             gong_activity=gong_activity,
+            salesforce_licensing=salesforce_licensing,
             last_updated=now,
             last_touch_date=now,
         )
