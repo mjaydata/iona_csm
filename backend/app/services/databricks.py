@@ -4688,6 +4688,7 @@ class DatabricksService:
         page_size: int = 25,
         status_filter: Optional[str] = None,
         severity_filter: Optional[str] = None,
+        type_filter: Optional[str] = None,
     ) -> Tuple[List[SupportTicket], int]:
         """Get paginated support tickets for an account."""
         logger.info(f"get_support_tickets_paginated: account={account_name}, page={page}, size={page_size}")
@@ -4703,12 +4704,11 @@ class DatabricksService:
                 # Build filter conditions
                 status_conditions = ""
                 severity_conditions = ""
+                type_conditions = ""
                 
                 if status_filter:
                     if status_filter == "open":
-                        status_conditions = "AND t.label_for_customer = 'Open'"
-                    elif status_filter == "in_progress":
-                        status_conditions = "AND t.label_for_customer NOT IN ('Open', 'Closed', 'Resolved')"
+                        status_conditions = "AND t.label_for_customer NOT IN ('Closed', 'Resolved')"
                     elif status_filter == "resolved":
                         status_conditions = "AND t.label_for_customer IN ('Closed', 'Resolved')"
                 
@@ -4717,6 +4717,9 @@ class DatabricksService:
                     freshdesk_priority = priority_map.get(severity_filter)
                     if freshdesk_priority:
                         severity_conditions = f"AND t.priority = '{freshdesk_priority}'"
+
+                if type_filter:
+                    type_conditions = f"AND t.type = '{self._sql_escape(type_filter)}'"
                 
                 # Count total
                 count_query = f"""
@@ -4731,6 +4734,7 @@ class DatabricksService:
                 WHERE t.company_id IN (SELECT id FROM freshdesk_company)
                 {status_conditions}
                 {severity_conditions}
+                {type_conditions}
                 """
                 cursor.execute(count_query, {"account_name": account_name})
                 total = cursor.fetchone()[0] or 0
@@ -4764,6 +4768,7 @@ class DatabricksService:
                 WHERE t.company_id IN (SELECT id FROM freshdesk_company)
                 {status_conditions}
                 {severity_conditions}
+                {type_conditions}
                 ORDER BY t.created_at DESC
                 LIMIT {page_size} OFFSET {offset}
                 """

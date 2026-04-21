@@ -253,8 +253,9 @@ async def get_support_tickets(
     account_id: str,
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(25, ge=1, le=100, description="Items per page"),
-    status: Optional[str] = Query(None, description="Filter by status: open, in_progress, resolved"),
+    status: Optional[str] = Query(None, description="Filter by status: open, resolved"),
     severity: Optional[str] = Query(None, description="Filter by severity: critical, high, medium, low"),
+    ticket_type: Optional[str] = Query(None, description="Filter by ticket type/theme"),
     db: DatabricksService = Depends(get_databricks_service),
 ) -> SupportTicketsResponse:
     """Get paginated support tickets for an account."""
@@ -269,6 +270,7 @@ async def get_support_tickets(
             page_size=page_size,
             status_filter=status,
             severity_filter=severity,
+            type_filter=ticket_type,
         )
         
         total_pages = (total + page_size - 1) // page_size

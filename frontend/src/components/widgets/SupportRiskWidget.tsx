@@ -17,7 +17,7 @@ interface SupportRiskWidgetProps {
 }
 
 type SeverityFilter = 'all' | 'critical' | 'high' | 'medium' | 'low'
-type StatusFilter = 'all' | 'open' | 'in_progress' | 'resolved'
+type StatusFilter = 'all' | 'open' | 'resolved'
 
 function ResolutionDistributionChart({ stats }: { stats: ResolutionStats }) {
   const [hoveredBucket, setHoveredBucket] = useState<number | null>(null)
@@ -134,26 +134,28 @@ function WorstSentimentCard({ ticket }: { ticket: WorstSentimentTicket }) {
 export function SupportRiskWidget({ data, isLoading, onHide, collapsed, onCollapsedChange, accountId }: SupportRiskWidgetProps) {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [severityFilter, setSeverityFilter] = useState<SeverityFilter>('all')
+  const [themeFilter, setThemeFilter] = useState<string | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
   const pageSize = 25
 
   const { data: ticketsData, isLoading: ticketsLoading } = useQuery({
-    queryKey: ['supportTickets', accountId, currentPage, statusFilter, severityFilter],
+    queryKey: ['supportTickets', accountId, currentPage, statusFilter, severityFilter, themeFilter],
     queryFn: () => getSupportTickets(accountId!, {
       page: currentPage,
       page_size: pageSize,
       status: statusFilter !== 'all' ? statusFilter : undefined,
       severity: severityFilter !== 'all' ? severityFilter : undefined,
+      ticket_type: themeFilter ?? undefined,
     }),
     enabled: !!accountId,
     staleTime: 30000,
   })
 
-  useEffect(() => { setCurrentPage(1) }, [statusFilter, severityFilter])
+  useEffect(() => { setCurrentPage(1) }, [statusFilter, severityFilter, themeFilter])
 
-  const tickets = ticketsData?.tickets || data?.recent_tickets || []
-  const totalTickets = ticketsData?.total || data?.total_tickets || 0
-  const totalPages = ticketsData?.total_pages || 1
+  const tickets = ticketsData?.tickets ?? data?.recent_tickets ?? []
+  const totalTickets = ticketsData?.total ?? data?.total_tickets ?? 0
+  const totalPages = ticketsData?.total_pages ?? 1
 
   const handleStatClick = (type: 'open' | 'critical' | 'high') => {
     if (type === 'open') {
@@ -168,10 +170,11 @@ export function SupportRiskWidget({ data, isLoading, onHide, collapsed, onCollap
   const clearFilters = () => {
     setStatusFilter('all')
     setSeverityFilter('all')
+    setThemeFilter(null)
     setCurrentPage(1)
   }
 
-  const hasActiveFilters = statusFilter !== 'all' || severityFilter !== 'all'
+  const hasActiveFilters = statusFilter !== 'all' || severityFilter !== 'all' || themeFilter !== null
 
   const getSentimentLabel = (avg: number) => {
     if (avg > 0.1) return { label: 'Positive', color: 'text-emerald-600', bg: 'bg-emerald-100' }
@@ -401,39 +404,15 @@ export function SupportRiskWidget({ data, isLoading, onHide, collapsed, onCollap
             </div>
           </div>
 
-          {/* ── Section 7: Top Themes ── */}
-          {data.themes.length > 0 && (
-            <div>
-              <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Top Themes</h4>
-              <div className="flex flex-wrap gap-1.5">
-                {data.themes.slice(0, 5).map((theme, idx) => (
-                  <div
-                    key={idx}
-                    className="flex items-center gap-1.5 px-2 py-1 bg-slate-100 rounded-md"
-                    title={`${theme.count} total / ${theme.open_count ?? 0} open, max severity: ${theme.severity}`}
-                  >
-                    <span className="text-xs text-slate-600">{theme.name}</span>
-                    <Badge variant={getSeverityVariant(theme.severity)} size="sm">
-                      {theme.count}
-                    </Badge>
-                    {(theme.open_count ?? 0) > 0 && (
-                      <span className="text-[10px] text-rose-500 font-medium">{theme.open_count} open</span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          {/* ═══════ Ticket List + Pagination ═══════ */}
 
-          {/* ═══════ Ticket List + Pagination (unchanged) ═══════ */}
-
-          {/* Filter Row */}
+          {/* Unified Filter Bar: status + themes */}
           <div className="flex items-center gap-2 flex-wrap">
             <span title="Filter tickets">
               <Filter className="w-3 h-3 text-slate-400" />
             </span>
             <div className="flex gap-1">
-              {(['all', 'open', 'in_progress', 'resolved'] as StatusFilter[]).map((sf) => (
+              {(['all', 'open', 'resolved'] as StatusFilter[]).map((sf) => (
                 <button
                   key={sf}
                   onClick={() => { setStatusFilter(sf); setCurrentPage(1) }}
@@ -444,10 +423,36 @@ export function SupportRiskWidget({ data, isLoading, onHide, collapsed, onCollap
                       : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
                   )}
                 >
-                  {sf === 'all' ? 'All' : sf === 'open' ? 'Open' : sf === 'in_progress' ? 'In Progress' : 'Resolved'}
+                  {sf === 'all' ? 'All' : sf === 'open' ? 'Open' : 'Resolved'}
                 </button>
               ))}
             </div>
+            {data.themes.length > 0 && (
+              <>
+                <div className="w-px h-4 bg-slate-200" />
+                <div className="flex gap-1 flex-wrap">
+                  {data.themes.slice(0, 5).map((theme, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => { setThemeFilter(themeFilter === theme.name ? null : theme.name); setCurrentPage(1) }}
+                      title={`${theme.count} total / ${theme.open_count ?? 0} open`}
+                      className={clsx(
+                        'inline-flex items-center gap-1 px-2 py-1 text-[10px] font-medium rounded transition-all',
+                        themeFilter === theme.name
+                          ? 'bg-indigo-100 text-indigo-700 ring-1 ring-indigo-300'
+                          : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                      )}
+                    >
+                      {theme.name}
+                      <Badge variant={getSeverityVariant(theme.severity)} size="sm">{theme.count}</Badge>
+                      {(theme.open_count ?? 0) > 0 && (
+                        <span className="text-rose-500">{theme.open_count} open</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
             {hasActiveFilters && (
               <button onClick={clearFilters} className="ml-auto text-[10px] text-slate-400 hover:text-slate-600 underline">
                 Clear filters

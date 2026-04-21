@@ -212,6 +212,7 @@ export interface GetSupportTicketsParams {
   page_size?: number
   status?: string
   severity?: string
+  ticket_type?: string
 }
 
 export async function getSupportTickets(
