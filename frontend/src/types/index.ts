@@ -329,7 +329,17 @@ export interface ResolutionStats {
   min_days: number
   max_days: number
   total_resolved: number
+  pct_resolved_under_3d: number
   distribution: ResolutionBucket[]
+}
+
+export interface WorstSentimentTicket {
+  id: string
+  subject: string
+  priority: string
+  days_open: number
+  net_sentiment_score: number
+  summary?: string
 }
 
 // Support Analysis
@@ -338,25 +348,53 @@ export interface SupportAnalysis {
   critical_tickets: number
   high_tickets: number
   avg_resolution_hours: number
-  ticket_trend: 'increasing' | 'stable' | 'decreasing'
+  ticket_trend: string
   themes: TicketTheme[]
   recent_tickets: SupportTicket[]
-  // Aggregate sentiment metrics
+
+  // Immediate risk
+  oldest_open_ticket_days?: number | null
+
+  // Volume & trend
+  tickets_last_30d?: number
+  tickets_prev_30d?: number
+  pct_change_30d?: string | null
+
+  // Resolution
+  pct_resolved_under_3d?: number | null
+  resolution_stats?: ResolutionStats
+
+  // Open ticket aging
+  open_age_lt_7d?: number
+  open_age_7_14d?: number
+  open_age_14_30d?: number
+  open_age_30_60d?: number
+  open_age_60plus?: number
+
+  // Sentiment
   avg_sentiment?: number
   total_tickets?: number
-  total_customer_messages?: number
-  total_support_messages?: number
   positive_ticket_count?: number
   negative_ticket_count?: number
   neutral_ticket_count?: number
-  // Resolution time distribution
-  resolution_stats?: ResolutionStats
+  sentiment_last_30d?: number | null
+  sentiment_prev_30d?: number | null
+  negative_open_tickets?: number
+  worst_sentiment_tickets?: WorstSentimentTicket[]
+
+  // Conversation activity
+  total_customer_messages?: number
+  total_support_messages?: number
+  customer_to_support_ratio?: number | null
+  open_no_response?: number
+  avg_messages_per_ticket?: number | null
 }
 
 export interface TicketTheme {
   name: string
   count: number
   severity: 'critical' | 'high' | 'medium' | 'low'
+  open_count?: number
 }
 
 export interface SupportTicketsResponse {

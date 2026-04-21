@@ -267,6 +267,7 @@ class TicketTheme(BaseModel):
     name: str
     count: int
     severity: str  # "critical", "high", "medium", "low"
+    open_count: int = 0
 
 
 class SupportTicket(BaseModel):
@@ -304,13 +305,24 @@ class ResolutionStats(BaseModel):
     """Resolution time statistics with distribution."""
     mean_days: float = 0.0
     median_days: float = 0.0
-    p25_days: float = 0.0  # 25th percentile
-    p75_days: float = 0.0  # 75th percentile
-    p90_days: float = 0.0  # 90th percentile
+    p25_days: float = 0.0
+    p75_days: float = 0.0
+    p90_days: float = 0.0
     min_days: float = 0.0
     max_days: float = 0.0
     total_resolved: int = 0
+    pct_resolved_under_3d: float = 0.0
     distribution: List[ResolutionBucket] = []
+
+
+class WorstSentimentTicket(BaseModel):
+    """Worst-sentiment open ticket summary for CSM escalation."""
+    id: str
+    subject: str
+    priority: str
+    days_open: int
+    net_sentiment_score: float
+    summary: Optional[str] = None
 
 
 class SupportAnalysis(BaseModel):
@@ -322,16 +334,43 @@ class SupportAnalysis(BaseModel):
     ticket_trend: str  # "increasing", "stable", "decreasing"
     themes: List[TicketTheme] = []
     recent_tickets: List[SupportTicket] = []
-    # Aggregate sentiment metrics
-    avg_sentiment: float = 0.0  # Average net sentiment across all tickets
+
+    # Immediate risk
+    oldest_open_ticket_days: Optional[int] = None
+
+    # Volume & trend
+    tickets_last_30d: int = 0
+    tickets_prev_30d: int = 0
+    pct_change_30d: Optional[str] = None
+
+    # Resolution
+    pct_resolved_under_3d: Optional[float] = None
+    resolution_stats: Optional[ResolutionStats] = None
+
+    # Open ticket aging
+    open_age_lt_7d: int = 0
+    open_age_7_14d: int = 0
+    open_age_14_30d: int = 0
+    open_age_30_60d: int = 0
+    open_age_60plus: int = 0
+
+    # Sentiment
+    avg_sentiment: float = 0.0
     total_tickets: int = 0
+    positive_ticket_count: int = 0
+    negative_ticket_count: int = 0
+    neutral_ticket_count: int = 0
+    sentiment_last_30d: Optional[float] = None
+    sentiment_prev_30d: Optional[float] = None
+    negative_open_tickets: int = 0
+    worst_sentiment_tickets: List[WorstSentimentTicket] = []
+
+    # Conversation activity
     total_customer_messages: int = 0
     total_support_messages: int = 0
-    positive_ticket_count: int = 0  # Tickets with positive sentiment
-    negative_ticket_count: int = 0  # Tickets with negative sentiment
-    neutral_ticket_count: int = 0   # Tickets with neutral sentiment
-    # Resolution time distribution
-    resolution_stats: Optional[ResolutionStats] = None
+    customer_to_support_ratio: Optional[float] = None
+    open_no_response: int = 0
+    avg_messages_per_ticket: Optional[float] = None
 
 
 class SupportTicketsResponse(BaseModel):

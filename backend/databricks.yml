@@ -19,3 +19,4 @@ targets:
     default: true
     workspace:
       host: https://dbc-97a2feb3-3e52.cloud.databricks.com
+      root_path: /Workspace/Users/arjun.mishra@ifs.com/.bundle/${bundle.name}/${bundle.target}

@@ -69,6 +69,7 @@ from ..models.schemas import (
     Task,
     TaskCreate,
     TicketTheme,
+    WorstSentimentTicket,
     ResolutionStats,
     ResolutionBucket,
     UsageAnalysis,
@@ -4189,136 +4190,358 @@ class DatabricksService:
         """Fetch comprehensive support analysis from Freshdesk data for an account."""
         logger.info(f"get_support_analysis called for account_name={account_name}")
 
+        INTERNAL_TYPE_FILTER = "AND (t.type NOT IN ('CloudOps Request (Internal)', 'C55 DevOps Request (Internal)') OR t.type IS NULL)"
+
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
 
-                # Query 1: Get ticket metrics with sentiment data
-                metrics_query = f"""
+                # --- Statement 1: Immediate Risk (top cards) ---
+                stmt1 = f"""
                 WITH freshdesk_company AS (
-                    SELECT id 
-                    FROM {DIM_FRESHDESK_CUSTOMERS_TABLE}
-                    WHERE name = :account_name
-                      AND _fivetran_deleted = false
+                    SELECT id FROM {DIM_FRESHDESK_CUSTOMERS_TABLE}
+                    WHERE name = :account_name AND _fivetran_deleted = false
                 ),
-                tickets_with_sentiment AS (
-                    SELECT 
-                        t.*,
-                        cs.net_sentiment_score,
-                        cs.total_messages,
-                        cs.customer_messages,
-                        cs.support_messages,
-                        cs.positive_messages,
-                        cs.negative_messages,
-                        cs.neutral_messages
+                support_tickets AS (
+                    SELECT t.*
                     FROM {FCT_FRESHDESK_TICKETS_TABLE} t
-                    LEFT JOIN {DIM_FRESHDESK_CONVERSATION_SUMMARY_TABLE} cs ON t.id = cs.ticket_id
                     WHERE t.company_id IN (SELECT id FROM freshdesk_company)
+                      {INTERNAL_TYPE_FILTER}
                 )
                 SELECT
                     COUNT(*) as total_tickets,
-                    COUNT(CASE WHEN label_for_customer NOT IN ('Closed', 'Resolved') THEN 1 END) as open_tickets,
-                    COUNT(CASE WHEN priority = 'Urgent' THEN 1 END) as critical_tickets,
-                    COUNT(CASE WHEN priority = 'High' THEN 1 END) as high_tickets,
-                    AVG(CASE 
+                    COUNT(CASE WHEN label_for_customer NOT IN ('Closed', 'Resolved') THEN 1 END) AS open_tickets,
+                    COUNT(CASE WHEN label_for_customer NOT IN ('Closed', 'Resolved') AND priority = 'Urgent' THEN 1 END) AS open_critical,
+                    COUNT(CASE WHEN label_for_customer NOT IN ('Closed', 'Resolved') AND priority = 'High' THEN 1 END) AS open_high,
+                    MAX(CASE WHEN label_for_customer NOT IN ('Closed', 'Resolved') THEN DATEDIFF(CURRENT_DATE(), created_at) END) AS oldest_open_ticket_days,
+                    AVG(CASE
                         WHEN stats_closed_at IS NOT NULL AND CAST(stats_closed_at AS STRING) != '-'
                         THEN TIMESTAMPDIFF(HOUR, created_at, stats_closed_at)
-                    END) as avg_resolution_hours,
-                    COUNT(CASE WHEN created_at >= DATE_SUB(CURRENT_DATE(), 30) THEN 1 END) as tickets_last_30,
-                    COUNT(CASE WHEN created_at >= DATE_SUB(CURRENT_DATE(), 60) AND created_at < DATE_SUB(CURRENT_DATE(), 30) THEN 1 END) as tickets_prev_30,
-                    AVG(COALESCE(net_sentiment_score, 0)) as avg_sentiment,
-                    SUM(COALESCE(customer_messages, 0)) as total_customer_messages,
-                    SUM(COALESCE(support_messages, 0)) as total_support_messages,
-                    COUNT(CASE WHEN net_sentiment_score > 0 THEN 1 END) as positive_ticket_count,
-                    COUNT(CASE WHEN net_sentiment_score < 0 THEN 1 END) as negative_ticket_count,
-                    COUNT(CASE WHEN net_sentiment_score = 0 OR net_sentiment_score IS NULL THEN 1 END) as neutral_ticket_count
-                FROM tickets_with_sentiment
+                    END) as avg_resolution_hours
+                FROM support_tickets
                 """
-
-                cursor.execute(metrics_query, {"account_name": account_name})
-                metrics_row = cursor.fetchone()
-
-                if not metrics_row:
+                cursor.execute(stmt1, {"account_name": account_name})
+                r1 = cursor.fetchone()
+                if not r1 or not r1[0]:
                     return self._empty_support_analysis()
 
-                total_tickets = int(metrics_row[0] or 0)
-                open_tickets = int(metrics_row[1] or 0)
-                critical_tickets = int(metrics_row[2] or 0)
-                high_tickets = int(metrics_row[3] or 0)
-                avg_resolution = float(metrics_row[4] or 0)
-                tickets_last_30 = int(metrics_row[5] or 0)
-                tickets_prev_30 = int(metrics_row[6] or 0)
-                avg_sentiment = float(metrics_row[7] or 0)
-                total_customer_messages = int(metrics_row[8] or 0)
-                total_support_messages = int(metrics_row[9] or 0)
-                positive_ticket_count = int(metrics_row[10] or 0)
-                negative_ticket_count = int(metrics_row[11] or 0)
-                neutral_ticket_count = int(metrics_row[12] or 0)
+                total_tickets = int(r1[0] or 0)
+                open_tickets = int(r1[1] or 0)
+                critical_tickets = int(r1[2] or 0)
+                high_tickets = int(r1[3] or 0)
+                oldest_open_ticket_days = int(r1[4]) if r1[4] is not None else None
+                avg_resolution_hours = round(float(r1[5] or 0), 1)
 
-                # Determine trend
-                if tickets_prev_30 == 0:
-                    trend = "stable"
-                elif tickets_last_30 > tickets_prev_30 * 1.1:
-                    trend = "increasing"
-                elif tickets_last_30 < tickets_prev_30 * 0.9:
-                    trend = "decreasing"
-                else:
-                    trend = "stable"
-
-                # Query 2: Get themes (grouped by type)
-                themes_query = f"""
+                # --- Statement 2: Volume & Trend ---
+                stmt2 = f"""
                 WITH freshdesk_company AS (
-                    SELECT id 
-                    FROM {DIM_FRESHDESK_CUSTOMERS_TABLE}
-                    WHERE name = :account_name
-                      AND _fivetran_deleted = false
+                    SELECT id FROM {DIM_FRESHDESK_CUSTOMERS_TABLE}
+                    WHERE name = :account_name AND _fivetran_deleted = false
+                ),
+                support_tickets AS (
+                    SELECT t.*
+                    FROM {FCT_FRESHDESK_TICKETS_TABLE} t
+                    WHERE t.company_id IN (SELECT id FROM freshdesk_company)
+                      {INTERNAL_TYPE_FILTER}
+                ),
+                periods AS (
+                    SELECT
+                        COUNT(CASE WHEN created_at >= DATE_SUB(CURRENT_DATE(), 30) THEN 1 END) AS tickets_last_30d,
+                        COUNT(CASE WHEN created_at >= DATE_SUB(CURRENT_DATE(), 60) AND created_at < DATE_SUB(CURRENT_DATE(), 30) THEN 1 END) AS tickets_prev_30d
+                    FROM support_tickets
                 )
-                SELECT 
-                    COALESCE(t.type, 'Other') as theme_name,
-                    COUNT(*) as ticket_count,
-                    MAX(t.priority) as max_priority
+                SELECT
+                    tickets_last_30d,
+                    tickets_prev_30d,
+                    CASE
+                        WHEN tickets_prev_30d = 0 AND tickets_last_30d > 0 THEN 'New activity'
+                        WHEN tickets_prev_30d = 0 AND tickets_last_30d = 0 THEN 'No activity'
+                        ELSE CONCAT(ROUND((tickets_last_30d - tickets_prev_30d) * 100.0 / tickets_prev_30d, 1), '%')
+                    END AS pct_change,
+                    CASE
+                        WHEN tickets_last_30d > tickets_prev_30d THEN 'Increasing'
+                        WHEN tickets_last_30d < tickets_prev_30d THEN 'Decreasing'
+                        ELSE 'Stable'
+                    END AS trend_direction
+                FROM periods
+                """
+                cursor.execute(stmt2, {"account_name": account_name})
+                r2 = cursor.fetchone()
+                tickets_last_30d = int(r2[0] or 0) if r2 else 0
+                tickets_prev_30d = int(r2[1] or 0) if r2 else 0
+                pct_change_30d = str(r2[2]) if r2 and r2[2] else None
+                trend = str(r2[3]).lower() if r2 and r2[3] else "stable"
+
+                # --- Statement 3: Resolution Performance ---
+                stmt3 = f"""
+                WITH freshdesk_company AS (
+                    SELECT id FROM {DIM_FRESHDESK_CUSTOMERS_TABLE}
+                    WHERE name = :account_name AND _fivetran_deleted = false
+                ),
+                resolved_tickets AS (
+                    SELECT
+                        TIMESTAMPDIFF(HOUR, t.created_at, t.stats_closed_at) / 24.0 AS resolution_days
+                    FROM {FCT_FRESHDESK_TICKETS_TABLE} t
+                    WHERE t.company_id IN (SELECT id FROM freshdesk_company)
+                      {INTERNAL_TYPE_FILTER}
+                      AND t.label_for_customer IN ('Closed', 'Resolved')
+                      AND t.stats_closed_at IS NOT NULL
+                      AND CAST(t.stats_closed_at AS STRING) != '-'
+                ),
+                valid_tickets AS (
+                    SELECT resolution_days FROM resolved_tickets
+                    WHERE resolution_days IS NOT NULL AND resolution_days >= 0
+                )
+                SELECT
+                    COUNT(*) AS total_resolved,
+                    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY resolution_days), 1) AS median_days,
+                    ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY resolution_days), 1) AS p90_days,
+                    ROUND(COUNT(CASE WHEN resolution_days < 3 THEN 1 END) * 100.0 / NULLIF(COUNT(*), 0), 1) AS pct_resolved_under_3d,
+                    COUNT(CASE WHEN resolution_days < 1 THEN 1 END) AS bucket_lt_1d,
+                    COUNT(CASE WHEN resolution_days >= 1 AND resolution_days < 3 THEN 1 END) AS bucket_1_3d,
+                    COUNT(CASE WHEN resolution_days >= 3 AND resolution_days < 7 THEN 1 END) AS bucket_3_7d,
+                    COUNT(CASE WHEN resolution_days >= 7 AND resolution_days < 14 THEN 1 END) AS bucket_7_14d,
+                    COUNT(CASE WHEN resolution_days >= 14 AND resolution_days < 30 THEN 1 END) AS bucket_14_30d,
+                    COUNT(CASE WHEN resolution_days >= 30 AND resolution_days < 60 THEN 1 END) AS bucket_30_60d,
+                    COUNT(CASE WHEN resolution_days >= 60 AND resolution_days < 90 THEN 1 END) AS bucket_60_90d,
+                    COUNT(CASE WHEN resolution_days >= 90 THEN 1 END) AS bucket_90plus
+                FROM valid_tickets
+                """
+                resolution_stats = None
+                try:
+                    cursor.execute(stmt3, {"account_name": account_name})
+                    r3 = cursor.fetchone()
+                    if r3 and r3[0] and int(r3[0]) > 0:
+                        total_resolved = int(r3[0])
+                        median_days = round(float(r3[1] or 0), 1)
+                        p90_days = round(float(r3[2] or 0), 1)
+                        pct_under_3d = round(float(r3[3] or 0), 1)
+                        bucket_counts = [int(r3[i] or 0) for i in range(4, 12)]
+                        bucket_defs = [
+                            ("< 1 day", 0, 1),
+                            ("1-3 days", 1, 3),
+                            ("3-7 days", 3, 7),
+                            ("7-14 days", 7, 14),
+                            ("14-30 days", 14, 30),
+                            ("30-60 days", 30, 60),
+                            ("60-90 days", 60, 90),
+                            ("90+ days", 90, 9999),
+                        ]
+                        distribution = []
+                        for (label, min_d, max_d), cnt in zip(bucket_defs, bucket_counts):
+                            pct = round((cnt / total_resolved) * 100, 1) if total_resolved > 0 else 0
+                            distribution.append(ResolutionBucket(label=label, min_days=min_d, max_days=max_d, count=cnt, percentage=pct))
+                        resolution_stats = ResolutionStats(
+                            median_days=median_days,
+                            p90_days=p90_days,
+                            total_resolved=total_resolved,
+                            pct_resolved_under_3d=pct_under_3d,
+                            distribution=distribution,
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to get resolution stats: {e}")
+
+                # --- Statement 4: Open Ticket Aging ---
+                stmt4 = f"""
+                WITH freshdesk_company AS (
+                    SELECT id FROM {DIM_FRESHDESK_CUSTOMERS_TABLE}
+                    WHERE name = :account_name AND _fivetran_deleted = false
+                ),
+                open_tickets AS (
+                    SELECT DATEDIFF(CURRENT_DATE(), t.created_at) AS days_open
+                    FROM {FCT_FRESHDESK_TICKETS_TABLE} t
+                    WHERE t.company_id IN (SELECT id FROM freshdesk_company)
+                      {INTERNAL_TYPE_FILTER}
+                      AND t.label_for_customer NOT IN ('Closed', 'Resolved')
+                )
+                SELECT
+                    COUNT(CASE WHEN days_open < 7 THEN 1 END) AS age_lt_7d,
+                    COUNT(CASE WHEN days_open >= 7 AND days_open < 14 THEN 1 END) AS age_7_14d,
+                    COUNT(CASE WHEN days_open >= 14 AND days_open < 30 THEN 1 END) AS age_14_30d,
+                    COUNT(CASE WHEN days_open >= 30 AND days_open < 60 THEN 1 END) AS age_30_60d,
+                    COUNT(CASE WHEN days_open >= 60 THEN 1 END) AS age_60plus
+                FROM open_tickets
+                """
+                open_age_lt_7d = open_age_7_14d = open_age_14_30d = open_age_30_60d = open_age_60plus = 0
+                try:
+                    cursor.execute(stmt4, {"account_name": account_name})
+                    r4 = cursor.fetchone()
+                    if r4:
+                        open_age_lt_7d = int(r4[0] or 0)
+                        open_age_7_14d = int(r4[1] or 0)
+                        open_age_14_30d = int(r4[2] or 0)
+                        open_age_30_60d = int(r4[3] or 0)
+                        open_age_60plus = int(r4[4] or 0)
+                except Exception as e:
+                    logger.warning(f"Failed to get open ticket aging: {e}")
+
+                # --- Statement 5: Sentiment Overview ---
+                stmt5 = f"""
+                WITH freshdesk_company AS (
+                    SELECT id FROM {DIM_FRESHDESK_CUSTOMERS_TABLE}
+                    WHERE name = :account_name AND _fivetran_deleted = false
+                ),
+                tickets_with_sentiment AS (
+                    SELECT t.id, t.label_for_customer, t.created_at, cs.net_sentiment_score
+                    FROM {FCT_FRESHDESK_TICKETS_TABLE} t
+                    LEFT JOIN {DIM_FRESHDESK_CONVERSATION_SUMMARY_TABLE} cs ON t.id = cs.ticket_id
+                    WHERE t.company_id IN (SELECT id FROM freshdesk_company)
+                      {INTERNAL_TYPE_FILTER}
+                )
+                SELECT
+                    ROUND(AVG(CASE WHEN net_sentiment_score IS NOT NULL THEN net_sentiment_score END), 2) AS overall_avg_sentiment,
+                    ROUND(AVG(CASE WHEN net_sentiment_score IS NOT NULL AND created_at >= DATE_SUB(CURRENT_DATE(), 30) THEN net_sentiment_score END), 2) AS sentiment_last_30d,
+                    ROUND(AVG(CASE WHEN net_sentiment_score IS NOT NULL AND created_at >= DATE_SUB(CURRENT_DATE(), 60) AND created_at < DATE_SUB(CURRENT_DATE(), 30) THEN net_sentiment_score END), 2) AS sentiment_prev_30d,
+                    COUNT(CASE WHEN label_for_customer NOT IN ('Closed', 'Resolved') AND net_sentiment_score < 0 THEN 1 END) AS negative_open_tickets,
+                    COUNT(CASE WHEN net_sentiment_score > 0 THEN 1 END) AS positive_ticket_count,
+                    COUNT(CASE WHEN net_sentiment_score < 0 THEN 1 END) AS negative_ticket_count,
+                    COUNT(CASE WHEN net_sentiment_score = 0 OR net_sentiment_score IS NULL THEN 1 END) AS neutral_ticket_count
+                FROM tickets_with_sentiment
+                """
+                avg_sentiment = 0.0
+                sentiment_last_30d = None
+                sentiment_prev_30d = None
+                negative_open_tickets = 0
+                positive_ticket_count = negative_ticket_count = neutral_ticket_count = 0
+                try:
+                    cursor.execute(stmt5, {"account_name": account_name})
+                    r5 = cursor.fetchone()
+                    if r5:
+                        avg_sentiment = round(float(r5[0] or 0), 2)
+                        sentiment_last_30d = round(float(r5[1]), 2) if r5[1] is not None else None
+                        sentiment_prev_30d = round(float(r5[2]), 2) if r5[2] is not None else None
+                        negative_open_tickets = int(r5[3] or 0)
+                        positive_ticket_count = int(r5[4] or 0)
+                        negative_ticket_count = int(r5[5] or 0)
+                        neutral_ticket_count = int(r5[6] or 0)
+                except Exception as e:
+                    logger.warning(f"Failed to get sentiment: {e}")
+
+                # --- Statement 6: Worst Sentiment Open Tickets (top 3) ---
+                stmt6 = f"""
+                WITH freshdesk_company AS (
+                    SELECT id FROM {DIM_FRESHDESK_CUSTOMERS_TABLE}
+                    WHERE name = :account_name AND _fivetran_deleted = false
+                )
+                SELECT
+                    t.id, t.subject, t.priority,
+                    DATEDIFF(CURRENT_DATE(), t.created_at) AS days_open,
+                    cs.net_sentiment_score, cs.ticket_summary
                 FROM {FCT_FRESHDESK_TICKETS_TABLE} t
+                LEFT JOIN {DIM_FRESHDESK_CONVERSATION_SUMMARY_TABLE} cs ON t.id = cs.ticket_id
                 WHERE t.company_id IN (SELECT id FROM freshdesk_company)
-                  AND t.type IS NOT NULL
-                GROUP BY t.type
-                ORDER BY ticket_count DESC
+                  {INTERNAL_TYPE_FILTER}
+                  AND t.label_for_customer NOT IN ('Closed', 'Resolved')
+                  AND cs.net_sentiment_score IS NOT NULL
+                ORDER BY cs.net_sentiment_score ASC
+                LIMIT 3
+                """
+                worst_sentiment_tickets = []
+                try:
+                    cursor.execute(stmt6, {"account_name": account_name})
+                    for row in cursor.fetchall():
+                        worst_sentiment_tickets.append(WorstSentimentTicket(
+                            id=str(row[0]),
+                            subject=str(row[1] or "No subject")[:150],
+                            priority=str(row[2] or "Low"),
+                            days_open=int(row[3] or 0),
+                            net_sentiment_score=float(row[4] or 0),
+                            summary=str(row[5])[:500] if row[5] else None,
+                        ))
+                except Exception as e:
+                    logger.warning(f"Failed to get worst sentiment tickets: {e}")
+
+                # --- Statement 7: Conversation Activity ---
+                stmt7 = f"""
+                WITH freshdesk_company AS (
+                    SELECT id FROM {DIM_FRESHDESK_CUSTOMERS_TABLE}
+                    WHERE name = :account_name AND _fivetran_deleted = false
+                ),
+                tickets_with_conv AS (
+                    SELECT
+                        t.id, t.label_for_customer,
+                        COALESCE(cs.customer_messages, 0) AS customer_messages,
+                        COALESCE(cs.support_messages, 0) AS support_messages,
+                        COALESCE(cs.total_messages, 0) AS total_messages
+                    FROM {FCT_FRESHDESK_TICKETS_TABLE} t
+                    LEFT JOIN {DIM_FRESHDESK_CONVERSATION_SUMMARY_TABLE} cs ON t.id = cs.ticket_id
+                    WHERE t.company_id IN (SELECT id FROM freshdesk_company)
+                      {INTERNAL_TYPE_FILTER}
+                )
+                SELECT
+                    SUM(customer_messages) AS total_customer_messages,
+                    SUM(support_messages) AS total_support_messages,
+                    ROUND(SUM(customer_messages) * 1.0 / NULLIF(SUM(support_messages), 0), 2) AS customer_to_support_ratio,
+                    COUNT(CASE WHEN label_for_customer NOT IN ('Closed', 'Resolved') AND support_messages = 0 THEN 1 END) AS open_no_response,
+                    ROUND(AVG(total_messages), 1) AS avg_messages_per_ticket
+                FROM tickets_with_conv
+                """
+                total_customer_messages = total_support_messages = 0
+                customer_to_support_ratio = None
+                open_no_response = 0
+                avg_messages_per_ticket = None
+                try:
+                    cursor.execute(stmt7, {"account_name": account_name})
+                    r7 = cursor.fetchone()
+                    if r7:
+                        total_customer_messages = int(r7[0] or 0)
+                        total_support_messages = int(r7[1] or 0)
+                        customer_to_support_ratio = round(float(r7[2]), 2) if r7[2] is not None else None
+                        open_no_response = int(r7[3] or 0)
+                        avg_messages_per_ticket = round(float(r7[4]), 1) if r7[4] is not None else None
+                except Exception as e:
+                    logger.warning(f"Failed to get conversation activity: {e}")
+
+                # --- Statement 8: Top Themes (all + open breakdown) ---
+                stmt8 = f"""
+                WITH freshdesk_company AS (
+                    SELECT id FROM {DIM_FRESHDESK_CUSTOMERS_TABLE}
+                    WHERE name = :account_name AND _fivetran_deleted = false
+                ),
+                support_tickets AS (
+                    SELECT t.type, t.label_for_customer, t.priority
+                    FROM {FCT_FRESHDESK_TICKETS_TABLE} t
+                    WHERE t.company_id IN (SELECT id FROM freshdesk_company)
+                      {INTERNAL_TYPE_FILTER}
+                      AND t.type IS NOT NULL
+                )
+                SELECT
+                    type AS theme,
+                    COUNT(*) AS total_count,
+                    COUNT(CASE WHEN label_for_customer NOT IN ('Closed', 'Resolved') THEN 1 END) AS open_count,
+                    MAX(priority) AS max_priority
+                FROM support_tickets
+                GROUP BY type
+                ORDER BY total_count DESC
                 LIMIT 5
                 """
-
-                cursor.execute(themes_query, {"account_name": account_name})
-                themes_rows = cursor.fetchall()
-
                 themes = []
-                for row in themes_rows:
-                    theme_name = row[0] or "Other"
-                    count = int(row[1] or 0)
-                    max_priority = row[2] or "Low"
-                    severity = self._map_priority_to_severity(max_priority)
-                    themes.append(TicketTheme(name=theme_name, count=count, severity=severity))
+                try:
+                    cursor.execute(stmt8, {"account_name": account_name})
+                    for row in cursor.fetchall():
+                        theme_name = str(row[0] or "Other")
+                        total_count = int(row[1] or 0)
+                        open_cnt = int(row[2] or 0)
+                        max_priority = str(row[3] or "Low")
+                        severity = self._map_priority_to_severity(max_priority)
+                        themes.append(TicketTheme(name=theme_name, count=total_count, severity=severity, open_count=open_cnt))
+                except Exception as e:
+                    logger.warning(f"Failed to get themes: {e}")
 
-                # Query 3: Get recent tickets WITH conversation summary data
+                # --- Recent tickets (kept unchanged) ---
                 recent_query = f"""
                 WITH freshdesk_company AS (
-                    SELECT id 
+                    SELECT id
                     FROM {DIM_FRESHDESK_CUSTOMERS_TABLE}
                     WHERE name = :account_name
                       AND _fivetran_deleted = false
                 )
-                SELECT 
-                    t.id,
-                    t.subject,
-                    t.priority,
-                    t.label_for_customer,
-                    t.created_at,
-                    t.type,
-                    cs.ticket_summary,
-                    cs.net_sentiment_score,
-                    cs.total_messages,
-                    cs.customer_messages,
-                    cs.support_messages,
-                    cs.positive_messages,
-                    cs.negative_messages,
-                    cs.neutral_messages,
+                SELECT
+                    t.id, t.subject, t.priority, t.label_for_customer,
+                    t.created_at, t.type,
+                    cs.ticket_summary, cs.net_sentiment_score,
+                    cs.total_messages, cs.customer_messages, cs.support_messages,
+                    cs.positive_messages, cs.negative_messages, cs.neutral_messages,
                     cs.last_message_at
                 FROM {FCT_FRESHDESK_TICKETS_TABLE} t
                 LEFT JOIN {DIM_FRESHDESK_CONVERSATION_SUMMARY_TABLE} cs ON t.id = cs.ticket_id
@@ -4326,7 +4549,6 @@ class DatabricksService:
                 ORDER BY t.created_at DESC
                 LIMIT 50
                 """
-
                 cursor.execute(recent_query, {"account_name": account_name})
                 recent_rows = cursor.fetchall()
 
@@ -4340,12 +4562,12 @@ class DatabricksService:
                     ticket_type = row[5]
                     summary = row[6]
                     net_sentiment = int(row[7] or 0)
-                    total_messages = int(row[8] or 0)
-                    customer_messages = int(row[9] or 0)
-                    support_messages = int(row[10] or 0)
-                    positive_messages = int(row[11] or 0)
-                    negative_messages = int(row[12] or 0)
-                    neutral_messages = int(row[13] or 0)
+                    t_total_messages = int(row[8] or 0)
+                    t_customer_messages = int(row[9] or 0)
+                    t_support_messages = int(row[10] or 0)
+                    t_positive_messages = int(row[11] or 0)
+                    t_negative_messages = int(row[12] or 0)
+                    t_neutral_messages = int(row[13] or 0)
                     last_message_at = row[14]
 
                     severity = self._map_priority_to_severity(priority)
@@ -4372,117 +4594,49 @@ class DatabricksService:
                         updated_at=created_at,
                         summary=summary[:500] if summary else None,
                         net_sentiment=net_sentiment,
-                        total_messages=total_messages,
-                        customer_messages=customer_messages,
-                        support_messages=support_messages,
-                        positive_messages=positive_messages,
-                        negative_messages=negative_messages,
-                        neutral_messages=neutral_messages,
+                        total_messages=t_total_messages,
+                        customer_messages=t_customer_messages,
+                        support_messages=t_support_messages,
+                        positive_messages=t_positive_messages,
+                        negative_messages=t_negative_messages,
+                        neutral_messages=t_neutral_messages,
                         last_message_at=last_message_at,
                         ticket_type=ticket_type,
                     ))
-
-                # Query 4: Resolution time distribution stats
-                resolution_stats_query = f"""
-                WITH freshdesk_company AS (
-                    SELECT id 
-                    FROM {DIM_FRESHDESK_CUSTOMERS_TABLE}
-                    WHERE name = :account_name
-                      AND _fivetran_deleted = false
-                ),
-                resolved_tickets AS (
-                    SELECT 
-                        t.id,
-                        t.created_at,
-                        t.stats_closed_at,
-                        CASE 
-                            WHEN t.stats_closed_at IS NOT NULL AND CAST(t.stats_closed_at AS STRING) != '-'
-                            THEN TIMESTAMPDIFF(HOUR, t.created_at, t.stats_closed_at) / 24.0
-                            ELSE NULL
-                        END as resolution_days
-                    FROM {FCT_FRESHDESK_TICKETS_TABLE} t
-                    WHERE t.company_id IN (SELECT id FROM freshdesk_company)
-                      AND t.label_for_customer IN ('Closed', 'Resolved')
-                      AND t.stats_closed_at IS NOT NULL 
-                      AND CAST(t.stats_closed_at AS STRING) != '-'
-                ),
-                stats AS (
-                    SELECT
-                        AVG(resolution_days) as mean_days,
-                        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY resolution_days) as median_days,
-                        PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY resolution_days) as p25_days,
-                        PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY resolution_days) as p75_days,
-                        PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY resolution_days) as p90_days,
-                        MIN(resolution_days) as min_days,
-                        MAX(resolution_days) as max_days,
-                        COUNT(*) as total_resolved,
-                        COUNT(CASE WHEN resolution_days < 1 THEN 1 END) as bucket_lt_1d,
-                        COUNT(CASE WHEN resolution_days >= 1 AND resolution_days < 3 THEN 1 END) as bucket_1_3d,
-                        COUNT(CASE WHEN resolution_days >= 3 AND resolution_days < 7 THEN 1 END) as bucket_3_7d,
-                        COUNT(CASE WHEN resolution_days >= 7 AND resolution_days < 14 THEN 1 END) as bucket_7_14d,
-                        COUNT(CASE WHEN resolution_days >= 14 AND resolution_days < 30 THEN 1 END) as bucket_14_30d,
-                        COUNT(CASE WHEN resolution_days >= 30 THEN 1 END) as bucket_30plus
-                    FROM resolved_tickets
-                    WHERE resolution_days IS NOT NULL AND resolution_days >= 0
-                )
-                SELECT * FROM stats
-                """
-
-                resolution_stats = None
-                try:
-                    cursor.execute(resolution_stats_query, {"account_name": account_name})
-                    res_row = cursor.fetchone()
-                    if res_row and res_row[7] and res_row[7] > 0:  # total_resolved > 0
-                        total_resolved = int(res_row[7])
-                        distribution = []
-                        buckets = [
-                            ("< 1 day", 0, 1, int(res_row[8] or 0)),
-                            ("1-3 days", 1, 3, int(res_row[9] or 0)),
-                            ("3-7 days", 3, 7, int(res_row[10] or 0)),
-                            ("7-14 days", 7, 14, int(res_row[11] or 0)),
-                            ("14-30 days", 14, 30, int(res_row[12] or 0)),
-                            ("30+ days", 30, 9999, int(res_row[13] or 0)),
-                        ]
-                        for label, min_d, max_d, count in buckets:
-                            pct = round((count / total_resolved) * 100, 1) if total_resolved > 0 else 0
-                            distribution.append(ResolutionBucket(
-                                label=label,
-                                min_days=min_d,
-                                max_days=max_d,
-                                count=count,
-                                percentage=pct
-                            ))
-                        resolution_stats = ResolutionStats(
-                            mean_days=round(float(res_row[0] or 0), 2),
-                            median_days=round(float(res_row[1] or 0), 2),
-                            p25_days=round(float(res_row[2] or 0), 2),
-                            p75_days=round(float(res_row[3] or 0), 2),
-                            p90_days=round(float(res_row[4] or 0), 2),
-                            min_days=round(float(res_row[5] or 0), 2),
-                            max_days=round(float(res_row[6] or 0), 2),
-                            total_resolved=total_resolved,
-                            distribution=distribution
-                        )
-                except Exception as e:
-                    logger.warning(f"Failed to get resolution stats: {e}")
-                    resolution_stats = None
 
                 return SupportAnalysis(
                     open_tickets=open_tickets,
                     critical_tickets=critical_tickets,
                     high_tickets=high_tickets,
-                    avg_resolution_hours=round(avg_resolution, 1),
+                    avg_resolution_hours=avg_resolution_hours,
                     ticket_trend=trend,
                     themes=themes,
                     recent_tickets=recent_tickets,
-                    avg_sentiment=round(avg_sentiment, 2),
+                    oldest_open_ticket_days=oldest_open_ticket_days,
+                    tickets_last_30d=tickets_last_30d,
+                    tickets_prev_30d=tickets_prev_30d,
+                    pct_change_30d=pct_change_30d,
+                    pct_resolved_under_3d=resolution_stats.pct_resolved_under_3d if resolution_stats else None,
+                    resolution_stats=resolution_stats,
+                    open_age_lt_7d=open_age_lt_7d,
+                    open_age_7_14d=open_age_7_14d,
+                    open_age_14_30d=open_age_14_30d,
+                    open_age_30_60d=open_age_30_60d,
+                    open_age_60plus=open_age_60plus,
+                    avg_sentiment=avg_sentiment,
                     total_tickets=total_tickets,
-                    total_customer_messages=total_customer_messages,
-                    total_support_messages=total_support_messages,
                     positive_ticket_count=positive_ticket_count,
                     negative_ticket_count=negative_ticket_count,
                     neutral_ticket_count=neutral_ticket_count,
-                    resolution_stats=resolution_stats,
+                    sentiment_last_30d=sentiment_last_30d,
+                    sentiment_prev_30d=sentiment_prev_30d,
+                    negative_open_tickets=negative_open_tickets,
+                    worst_sentiment_tickets=worst_sentiment_tickets,
+                    total_customer_messages=total_customer_messages,
+                    total_support_messages=total_support_messages,
+                    customer_to_support_ratio=customer_to_support_ratio,
+                    open_no_response=open_no_response,
+                    avg_messages_per_ticket=avg_messages_per_ticket,
                 )
 
         except Exception as e:
