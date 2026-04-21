@@ -6,7 +6,12 @@ import type {
   AccountWithCSMListResponse,
   ARRAnalysisResponse,
   ARRCustomerSummary,
-  CSMListResponse, 
+  CSMListResponse,
+  CSMNote,
+  CSMNoteAttachment,
+  CSMNoteCreate,
+  CSMNotesResponse,
+  CSMNoteUpdate,
   CSMStats, 
   CustomerGrowthResponse,
   CustomerGrowthBreakdownResponse,
@@ -475,6 +480,47 @@ export async function getUserPreference(key: string): Promise<{ value: string | 
 export async function saveUserPreference(key: string, value: string): Promise<boolean> {
   const { data } = await api.put(`/preferences/${key}`, { value })
   return data.success
+}
+
+// CSM Notes
+export async function getCSMNotes(
+  accountId: string,
+  params?: { search?: string; note_type?: string }
+): Promise<CSMNotesResponse> {
+  const { data } = await api.get<CSMNotesResponse>(`/accounts/${accountId}/notes`, { params })
+  return data
+}
+
+export async function createCSMNote(accountId: string, note: CSMNoteCreate): Promise<CSMNote> {
+  const { data } = await api.post<CSMNote>(`/accounts/${accountId}/notes`, note)
+  return data
+}
+
+export async function updateCSMNote(accountId: string, noteId: string, update: CSMNoteUpdate): Promise<void> {
+  await api.patch(`/accounts/${accountId}/notes/${noteId}`, update)
+}
+
+export async function deleteCSMNote(accountId: string, noteId: string): Promise<void> {
+  await api.delete(`/accounts/${accountId}/notes/${noteId}`)
+}
+
+export async function uploadNoteAttachment(
+  accountId: string,
+  noteId: string,
+  file: File
+): Promise<CSMNoteAttachment> {
+  const form = new FormData()
+  form.append('file', file)
+  const { data } = await api.post<CSMNoteAttachment>(
+    `/accounts/${accountId}/notes/${noteId}/attachments`,
+    form,
+    { headers: { 'Content-Type': 'multipart/form-data' } }
+  )
+  return data
+}
+
+export function getNoteAttachmentDownloadUrl(accountId: string, attachmentId: string): string {
+  return `/api/accounts/${accountId}/notes/attachments/${attachmentId}/download`
 }
 
 export default api

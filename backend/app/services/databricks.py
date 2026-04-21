@@ -1,8 +1,10 @@
 """Databricks SQL connector service."""
 
+import json
 import logging
 import os
 import re
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
@@ -32,6 +34,11 @@ from ..models.schemas import (
     ContributingFactor,
     ConfluenceImplementationResponse,
     CSM,
+    CSMNote,
+    CSMNoteAttachment,
+    CSMNoteCreate,
+    CSMNoteUpdate,
+    CSMNotesResponse,
     CSMListResponse,
     CSMStats,
     CustomerEvent,
@@ -191,6 +198,10 @@ DIM_FRESHDESK_CUSTOMERS_TABLE = "silver.silver_layer.dim_freshdesk_account_custo
 FCT_FRESHDESK_TICKETS_TABLE = "silver.silver_layer.fct_freshdesk_ticket_history"
 DIM_FRESHDESK_CONVERSATION_SUMMARY_TABLE = "silver.silver_layer.dim_freshdesk_ticket_conversation_summary"
 KB_CONFLUENCE_CUSTOMER_CONTEXT_TABLE = "silver.silver_layer.kb_confluence_customer_context"
+
+CSM_NOTES_TABLE = "silver.silver_layer.csm_notes"
+CSM_NOTE_ATTACHMENTS_TABLE = "silver.silver_layer.csm_note_attachments"
+CSM_NOTES_VOLUME_PATH = "/Volumes/silver/silver_layer/csm_notes_files"
 
 
 class DatabricksService:
@@ -7710,6 +7721,383 @@ class DatabricksService:
                 ),
             ],
         )
+
+
+    # ── CSM Notes CRUD ──────────────────────────────────────────────
+
+    def ensure_csm_notes_tables(self):
+        """Create CSM notes tables if they don't exist."""
+        try:
+            with self.get_connection() as conn:
+                if conn is None:
+                    return
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {CSM_NOTES_TABLE} (
+                        id STRING NOT NULL,
+                        account_id STRING NOT NULL,
+                        author STRING,
+                        author_email STRING,
+                        content_html STRING,
+                        content_plain STRING,
+                        note_type STRING DEFAULT 'general',
+                        tags STRING,
+                        is_pinned BOOLEAN DEFAULT false,
+                        visibility STRING DEFAULT 'shared',
+                        ai_summary STRING,
+                        ai_sentiment DOUBLE,
+                        manual_sentiment STRING,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
+                        updated_by STRING
+                    )
+                """)
+                cursor.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {CSM_NOTE_ATTACHMENTS_TABLE} (
+                        id STRING NOT NULL,
+                        note_id STRING NOT NULL,
+                        file_name STRING,
+                        file_type STRING,
+                        file_size_bytes BIGINT,
+                        volume_path STRING,
+                        uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP()
+                    )
+                """)
+                cursor.close()
+                logger.info("CSM notes tables ensured")
+        except Exception as e:
+            logger.error(f"ensure_csm_notes_tables error: {e}", exc_info=True)
+
+    def _derive_sentiment(self, ai_sentiment: Optional[float], manual_sentiment: Optional[str]) -> Optional[str]:
+        if manual_sentiment:
+            return manual_sentiment
+        if ai_sentiment is None:
+            return None
+        if ai_sentiment > 0.1:
+            return "positive"
+        if ai_sentiment < -0.1:
+            return "negative"
+        return "neutral"
+
+    def get_csm_notes(
+        self, account_id: str, search: Optional[str] = None, note_type: Optional[str] = None
+    ) -> CSMNotesResponse:
+        """List CSM notes for an account, pinned first, then by date desc."""
+        logger.info(f"get_csm_notes: account_id={account_id}")
+        try:
+            with self.get_connection() as conn:
+                if conn is None:
+                    return CSMNotesResponse(notes=[], total=0)
+                cursor = conn.cursor()
+
+                conditions = [f"n.account_id = '{self._sql_escape(account_id)}'"]
+                if search and search.strip():
+                    conditions.append(f"LOWER(n.content_plain) LIKE '%{self._sql_escape(search.strip().lower())}%'")
+                if note_type and note_type != "all":
+                    conditions.append(f"n.note_type = '{self._sql_escape(note_type)}'")
+
+                where = " AND ".join(conditions)
+
+                notes_query = f"""
+                    SELECT n.id, n.account_id, n.author, n.author_email,
+                           n.content_html, n.content_plain, n.note_type,
+                           n.tags, n.is_pinned, n.visibility,
+                           n.ai_summary, n.ai_sentiment, n.manual_sentiment,
+                           n.created_at, n.updated_at, n.updated_by
+                    FROM {CSM_NOTES_TABLE} n
+                    WHERE {where}
+                    ORDER BY n.is_pinned DESC, n.created_at DESC
+                """
+                cursor.execute(notes_query)
+                note_rows = cursor.fetchall()
+
+                note_ids = []
+                notes_map = {}
+                for row in note_rows:
+                    note_id = str(row[0])
+                    note_ids.append(note_id)
+                    tags_raw = row[7]
+                    try:
+                        tags = json.loads(tags_raw) if tags_raw else []
+                    except (json.JSONDecodeError, TypeError):
+                        tags = []
+                    ai_sent = float(row[11]) if row[11] is not None else None
+                    manual_sent = str(row[12]) if row[12] else None
+                    created_at = row[13]
+                    updated_at = row[14]
+                    if isinstance(created_at, str):
+                        try:
+                            created_at = datetime.fromisoformat(created_at.replace('Z', '+00:00').replace('+00:00', ''))
+                        except:
+                            created_at = datetime.now()
+                    if isinstance(updated_at, str):
+                        try:
+                            updated_at = datetime.fromisoformat(updated_at.replace('Z', '+00:00').replace('+00:00', ''))
+                        except:
+                            updated_at = datetime.now()
+
+                    note = CSMNote(
+                        id=note_id,
+                        account_id=str(row[1]),
+                        author=str(row[2] or ""),
+                        author_email=str(row[3] or ""),
+                        content_html=str(row[4] or ""),
+                        content_plain=str(row[5] or ""),
+                        note_type=str(row[6] or "general"),
+                        tags=tags,
+                        is_pinned=bool(row[8]),
+                        visibility=str(row[9] or "shared"),
+                        ai_summary=str(row[10]) if row[10] else None,
+                        ai_sentiment=ai_sent,
+                        manual_sentiment=manual_sent,
+                        effective_sentiment=self._derive_sentiment(ai_sent, manual_sent),
+                        attachments=[],
+                        created_at=created_at,
+                        updated_at=updated_at,
+                        updated_by=str(row[15]) if row[15] else None,
+                    )
+                    notes_map[note_id] = note
+
+                if note_ids:
+                    ids_str = ",".join(f"'{nid}'" for nid in note_ids)
+                    att_query = f"""
+                        SELECT id, note_id, file_name, file_type, file_size_bytes, volume_path, uploaded_at
+                        FROM {CSM_NOTE_ATTACHMENTS_TABLE}
+                        WHERE note_id IN ({ids_str})
+                        ORDER BY uploaded_at ASC
+                    """
+                    cursor.execute(att_query)
+                    for arow in cursor.fetchall():
+                        att_note_id = str(arow[1])
+                        if att_note_id in notes_map:
+                            uploaded_at = arow[6]
+                            if isinstance(uploaded_at, str):
+                                try:
+                                    uploaded_at = datetime.fromisoformat(uploaded_at.replace('Z', '+00:00').replace('+00:00', ''))
+                                except:
+                                    uploaded_at = datetime.now()
+                            notes_map[att_note_id].attachments.append(CSMNoteAttachment(
+                                id=str(arow[0]),
+                                note_id=att_note_id,
+                                file_name=str(arow[2] or ""),
+                                file_type=str(arow[3] or ""),
+                                file_size_bytes=int(arow[4] or 0),
+                                volume_path=str(arow[5] or ""),
+                                uploaded_at=uploaded_at,
+                            ))
+
+                cursor.close()
+                notes_list = [notes_map[nid] for nid in note_ids]
+                return CSMNotesResponse(notes=notes_list, total=len(notes_list))
+
+        except Exception as e:
+            logger.error(f"get_csm_notes error: {e}", exc_info=True)
+            return CSMNotesResponse(notes=[], total=0)
+
+    def create_csm_note(
+        self, account_id: str, author: str, author_email: str, note: CSMNoteCreate
+    ) -> Optional[CSMNote]:
+        """Create a new CSM note."""
+        note_id = str(uuid.uuid4())
+        logger.info(f"create_csm_note: account={account_id}, id={note_id}")
+        try:
+            with self.get_connection() as conn:
+                if conn is None:
+                    return None
+                cursor = conn.cursor()
+                tags_json = json.dumps(note.tags) if note.tags else "[]"
+                cursor.execute(f"""
+                    INSERT INTO {CSM_NOTES_TABLE}
+                        (id, account_id, author, author_email, content_html, content_plain,
+                         note_type, tags, is_pinned, visibility, created_at, updated_at, updated_by)
+                    VALUES (
+                        '{self._sql_escape(note_id)}',
+                        '{self._sql_escape(account_id)}',
+                        '{self._sql_escape(author)}',
+                        '{self._sql_escape(author_email)}',
+                        '{self._sql_escape(note.content_html)}',
+                        '{self._sql_escape(note.content_plain)}',
+                        '{self._sql_escape(note.note_type)}',
+                        '{self._sql_escape(tags_json)}',
+                        false,
+                        '{self._sql_escape(note.visibility)}',
+                        CURRENT_TIMESTAMP(),
+                        CURRENT_TIMESTAMP(),
+                        '{self._sql_escape(author_email)}'
+                    )
+                """)
+                cursor.close()
+                now = datetime.now()
+                return CSMNote(
+                    id=note_id,
+                    account_id=account_id,
+                    author=author,
+                    author_email=author_email,
+                    content_html=note.content_html,
+                    content_plain=note.content_plain,
+                    note_type=note.note_type,
+                    tags=note.tags,
+                    is_pinned=False,
+                    visibility=note.visibility,
+                    attachments=[],
+                    created_at=now,
+                    updated_at=now,
+                    updated_by=author_email,
+                )
+        except Exception as e:
+            logger.error(f"create_csm_note error: {e}", exc_info=True)
+            return None
+
+    def update_csm_note(self, note_id: str, author_email: str, update: CSMNoteUpdate) -> bool:
+        """Update a CSM note."""
+        logger.info(f"update_csm_note: note_id={note_id}")
+        try:
+            with self.get_connection() as conn:
+                if conn is None:
+                    return False
+                cursor = conn.cursor()
+                sets = [
+                    f"updated_at = CURRENT_TIMESTAMP()",
+                    f"updated_by = '{self._sql_escape(author_email)}'",
+                ]
+                if update.content_html is not None:
+                    sets.append(f"content_html = '{self._sql_escape(update.content_html)}'")
+                if update.content_plain is not None:
+                    sets.append(f"content_plain = '{self._sql_escape(update.content_plain)}'")
+                if update.note_type is not None:
+                    sets.append(f"note_type = '{self._sql_escape(update.note_type)}'")
+                if update.tags is not None:
+                    sets.append(f"tags = '{self._sql_escape(json.dumps(update.tags))}'")
+                if update.is_pinned is not None:
+                    sets.append(f"is_pinned = {'true' if update.is_pinned else 'false'}")
+                if update.visibility is not None:
+                    sets.append(f"visibility = '{self._sql_escape(update.visibility)}'")
+                if update.manual_sentiment is not None:
+                    if update.manual_sentiment == "auto":
+                        sets.append("manual_sentiment = NULL")
+                    else:
+                        sets.append(f"manual_sentiment = '{self._sql_escape(update.manual_sentiment)}'")
+
+                set_clause = ", ".join(sets)
+                cursor.execute(f"""
+                    UPDATE {CSM_NOTES_TABLE}
+                    SET {set_clause}
+                    WHERE id = '{self._sql_escape(note_id)}'
+                """)
+                cursor.close()
+                return True
+        except Exception as e:
+            logger.error(f"update_csm_note error: {e}", exc_info=True)
+            return False
+
+    def delete_csm_note(self, note_id: str) -> bool:
+        """Delete a CSM note and its attachments."""
+        logger.info(f"delete_csm_note: note_id={note_id}")
+        try:
+            with self.get_connection() as conn:
+                if conn is None:
+                    return False
+                cursor = conn.cursor()
+
+                att_query = f"""
+                    SELECT volume_path FROM {CSM_NOTE_ATTACHMENTS_TABLE}
+                    WHERE note_id = '{self._sql_escape(note_id)}'
+                """
+                cursor.execute(att_query)
+                for row in cursor.fetchall():
+                    vol_path = str(row[0]) if row[0] else None
+                    if vol_path:
+                        try:
+                            os.remove(vol_path)
+                        except OSError:
+                            logger.warning(f"Could not delete file: {vol_path}")
+
+                cursor.execute(f"""
+                    DELETE FROM {CSM_NOTE_ATTACHMENTS_TABLE}
+                    WHERE note_id = '{self._sql_escape(note_id)}'
+                """)
+                cursor.execute(f"""
+                    DELETE FROM {CSM_NOTES_TABLE}
+                    WHERE id = '{self._sql_escape(note_id)}'
+                """)
+                cursor.close()
+                return True
+        except Exception as e:
+            logger.error(f"delete_csm_note error: {e}", exc_info=True)
+            return False
+
+    def save_note_attachment(
+        self, note_id: str, file_name: str, file_type: str, file_size: int, volume_path: str
+    ) -> Optional[CSMNoteAttachment]:
+        """Insert an attachment record for a note."""
+        att_id = str(uuid.uuid4())
+        logger.info(f"save_note_attachment: note={note_id}, file={file_name}")
+        try:
+            with self.get_connection() as conn:
+                if conn is None:
+                    return None
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    INSERT INTO {CSM_NOTE_ATTACHMENTS_TABLE}
+                        (id, note_id, file_name, file_type, file_size_bytes, volume_path, uploaded_at)
+                    VALUES (
+                        '{self._sql_escape(att_id)}',
+                        '{self._sql_escape(note_id)}',
+                        '{self._sql_escape(file_name)}',
+                        '{self._sql_escape(file_type)}',
+                        {file_size},
+                        '{self._sql_escape(volume_path)}',
+                        CURRENT_TIMESTAMP()
+                    )
+                """)
+                cursor.close()
+                return CSMNoteAttachment(
+                    id=att_id,
+                    note_id=note_id,
+                    file_name=file_name,
+                    file_type=file_type,
+                    file_size_bytes=file_size,
+                    volume_path=volume_path,
+                    uploaded_at=datetime.now(),
+                )
+        except Exception as e:
+            logger.error(f"save_note_attachment error: {e}", exc_info=True)
+            return None
+
+    def get_note_attachment(self, attachment_id: str) -> Optional[CSMNoteAttachment]:
+        """Get a single attachment record."""
+        try:
+            with self.get_connection() as conn:
+                if conn is None:
+                    return None
+                cursor = conn.cursor()
+                cursor.execute(f"""
+                    SELECT id, note_id, file_name, file_type, file_size_bytes, volume_path, uploaded_at
+                    FROM {CSM_NOTE_ATTACHMENTS_TABLE}
+                    WHERE id = '{self._sql_escape(attachment_id)}'
+                """)
+                row = cursor.fetchone()
+                cursor.close()
+                if not row:
+                    return None
+                uploaded_at = row[6]
+                if isinstance(uploaded_at, str):
+                    try:
+                        uploaded_at = datetime.fromisoformat(uploaded_at.replace('Z', '+00:00').replace('+00:00', ''))
+                    except:
+                        uploaded_at = datetime.now()
+                return CSMNoteAttachment(
+                    id=str(row[0]),
+                    note_id=str(row[1]),
+                    file_name=str(row[2] or ""),
+                    file_type=str(row[3] or ""),
+                    file_size_bytes=int(row[4] or 0),
+                    volume_path=str(row[5] or ""),
+                    uploaded_at=uploaded_at,
+                )
+        except Exception as e:
+            logger.error(f"get_note_attachment error: {e}", exc_info=True)
+            return None
 
 
 # Dependency injection

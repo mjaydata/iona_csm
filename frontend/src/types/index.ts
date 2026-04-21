@@ -681,6 +681,63 @@ export interface HumanNote {
   tags: string[]
 }
 
+export type NoteType = 'general' | 'qbr' | 'escalation' | 'check_in' | 'handoff' | 'internal'
+export type NoteSentiment = 'positive' | 'neutral' | 'negative'
+
+export interface CSMNoteAttachment {
+  id: string
+  note_id: string
+  file_name: string
+  file_type: string
+  file_size_bytes: number
+  volume_path: string
+  uploaded_at: string
+}
+
+export interface CSMNote {
+  id: string
+  account_id: string
+  author: string
+  author_email: string
+  content_html: string
+  content_plain: string
+  note_type: NoteType
+  tags: string[]
+  is_pinned: boolean
+  visibility: 'shared' | 'private'
+  ai_summary?: string
+  ai_sentiment?: number
+  manual_sentiment?: NoteSentiment | null
+  effective_sentiment?: NoteSentiment
+  attachments: CSMNoteAttachment[]
+  created_at: string
+  updated_at: string
+  updated_by?: string
+}
+
+export interface CSMNoteCreate {
+  content_html: string
+  content_plain: string
+  note_type?: NoteType
+  tags?: string[]
+  visibility?: 'shared' | 'private'
+}
+
+export interface CSMNoteUpdate {
+  content_html?: string
+  content_plain?: string
+  note_type?: NoteType
+  tags?: string[]
+  is_pinned?: boolean
+  visibility?: string
+  manual_sentiment?: NoteSentiment | 'auto' | null
+}
+
+export interface CSMNotesResponse {
+  notes: CSMNote[]
+  total: number
+}
+
 // Meeting Brief
 export interface MeetingBrief {
   generated_at: string

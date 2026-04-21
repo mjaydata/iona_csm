@@ -674,7 +674,7 @@ class ActionAlert(BaseModel):
 
 
 class HumanNote(BaseModel):
-    """CSM-added note."""
+    """CSM-added note (legacy mock model)."""
     id: str
     author: str
     author_email: str
@@ -682,6 +682,65 @@ class HumanNote(BaseModel):
     created_at: datetime
     updated_at: datetime
     tags: List[str] = []
+
+
+class CSMNoteAttachment(BaseModel):
+    """File attached to a CSM note."""
+    id: str
+    note_id: str
+    file_name: str
+    file_type: str
+    file_size_bytes: int
+    volume_path: str
+    uploaded_at: datetime
+
+
+class CSMNote(BaseModel):
+    """CSM note with rich text, attachments, and AI analysis."""
+    id: str
+    account_id: str
+    author: str
+    author_email: str
+    content_html: str
+    content_plain: str
+    note_type: str = "general"
+    tags: List[str] = []
+    is_pinned: bool = False
+    visibility: str = "shared"
+    ai_summary: Optional[str] = None
+    ai_sentiment: Optional[float] = None
+    manual_sentiment: Optional[str] = None
+    effective_sentiment: Optional[str] = None
+    attachments: List[CSMNoteAttachment] = []
+    created_at: datetime
+    updated_at: datetime
+    updated_by: Optional[str] = None
+
+
+class CSMNoteCreate(BaseModel):
+    """Request body for creating a note."""
+    content_html: str
+    content_plain: str
+    note_type: str = "general"
+    tags: List[str] = []
+    visibility: str = "shared"
+
+
+class CSMNoteUpdate(BaseModel):
+    """Request body for updating a note."""
+    content_html: Optional[str] = None
+    content_plain: Optional[str] = None
+    note_type: Optional[str] = None
+    tags: Optional[List[str]] = None
+    is_pinned: Optional[bool] = None
+    visibility: Optional[str] = None
+    manual_sentiment: Optional[str] = None
+
+
+class CSMNotesResponse(BaseModel):
+    """Response for listing notes."""
+    notes: List[CSMNote]
+    total: int
 
 
 class MeetingBrief(BaseModel):

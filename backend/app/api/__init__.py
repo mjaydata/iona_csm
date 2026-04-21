@@ -6,6 +6,7 @@ from .accounts import router as accounts_router
 from .arr import arr_router
 from .csm import router as csm_router
 from .metrics import router as metrics_router
+from .notes import router as notes_router
 from .preferences import router as preferences_router
 from .tasks import router as tasks_router
 
@@ -13,6 +14,7 @@ from .tasks import router as tasks_router
 api_router = APIRouter(prefix="/api")
 
 api_router.include_router(accounts_router, prefix="/accounts", tags=["accounts"])
+api_router.include_router(notes_router, prefix="/accounts", tags=["notes"])
 api_router.include_router(arr_router, prefix="/arr", tags=["arr"])
 api_router.include_router(csm_router, prefix="/csm", tags=["csm"])
 api_router.include_router(metrics_router, prefix="/metrics", tags=["metrics"])

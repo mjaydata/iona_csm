@@ -11,6 +11,7 @@ export { ConfluenceImplementationWidget } from './ConfluenceImplementationWidget
 export { MeetingBriefWidget } from './MeetingBriefWidget'
 export { ChangeDetectionWidget } from './ChangeDetectionWidget'
 export { HumanNotesWidget } from './HumanNotesWidget'
+export { CSMNotesWidget } from './CSMNotesWidget'
 export { ChurnRiskWidget } from './ChurnRiskWidget'
 export { ValueRealizationWidget } from './ValueRealizationWidget'
 export { SentimentWidget } from './SentimentWidget'

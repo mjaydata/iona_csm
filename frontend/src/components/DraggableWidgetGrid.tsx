@@ -31,7 +31,7 @@ import {
   ConfluenceImplementationWidget,
   MeetingBriefWidget,
   ChangeDetectionWidget,
-  HumanNotesWidget,
+  CSMNotesWidget,
   ChurnRiskWidget,
   ValueRealizationWidget,
   SentimentWidget,
@@ -100,7 +100,7 @@ const WIDGET_DEFINITIONS: WidgetDefinition[] = [
   { id: 'benchmark', type: 'benchmark', title: 'Benchmarking', icon: <BarChart3 className="w-4 h-4" />, defaultSize: 1, defaultVisible: false, underDevelopment: true },
   { id: 'value', type: 'value', title: 'Value Realization', icon: <Award className="w-4 h-4" />, defaultSize: 1, defaultVisible: false, underDevelopment: true },
   { id: 'changes', type: 'changes', title: 'Changes Since Last Touch', icon: <GitCompare className="w-4 h-4" />, defaultSize: 2, defaultVisible: false, underDevelopment: true },
-  { id: 'notes', type: 'notes', title: 'CSM Notes', icon: <StickyNote className="w-4 h-4" />, defaultSize: 1, defaultVisible: false, underDevelopment: true },
+  { id: 'notes', type: 'notes', title: 'CSM Notes', icon: <StickyNote className="w-4 h-4" />, defaultSize: 1, defaultHeightSize: 3, defaultVisible: true },
   { id: 'signals', type: 'signals', title: 'Recent Signals', icon: <Radio className="w-4 h-4" />, defaultSize: 1, defaultVisible: false, underDevelopment: true },
   { id: 'gong', type: 'gong', title: 'Gong Activity', icon: <PhoneCall className="w-4 h-4" />, defaultSize: 2, defaultVisible: true },
   { id: 'licensing', type: 'licensing', title: 'Licensing', icon: <KeyRound className="w-4 h-4" />, defaultSize: 1, defaultHeightSize: 3, defaultVisible: true },
@@ -291,7 +291,7 @@ export function DraggableWidgetGrid({
       case 'changes':
         return <ChangeDetectionWidget data={data?.changes_since_last_touch} lastTouchDate={data?.last_touch_date} {...commonProps} />
       case 'notes':
-        return <HumanNotesWidget data={data?.notes} {...commonProps} />
+        return <CSMNotesWidget accountId={data?.account.id} {...commonProps} />
       case 'risk':
         return <ChurnRiskWidget data={data?.risk_assessment} {...commonProps} />
       case 'value':
